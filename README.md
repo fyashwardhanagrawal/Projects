@@ -38,3 +38,12 @@ A mobile-first shared recipe PWA for two people using Supabase + Vercel, with fr
 No new Supabase SQL is required. Replace the v0.5 repo files with this folder, keep `api/import-recipe.js` inside `api/`, commit to the Vercel-connected production branch, and Vercel should deploy automatically.
 
 Because v0.6 changes the service-worker cache name and claims clients immediately, fully closing/reopening the installed PWA after deployment should pick up the new shell more reliably.
+
+
+## v0.6.1 mobile transcription hotfix
+- Removes the silent CPU/WASM Whisper fallback that could take 10+ minutes on phones.
+- Requires working WebGPU for local video transcription; if unavailable, fails quickly with an actionable message.
+- Upgrades the browser inference runtime to Transformers.js 4.2.0.
+- Uses a quantized Whisper tiny English model on WebGPU.
+- Transcribes in 20-second chunks so progress reflects actual inference rather than appearing stuck at 55%.
+- Caps local video transcription at 3 minutes for phone-friendly processing.

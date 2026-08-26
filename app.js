@@ -532,9 +532,15 @@ async function decodeMediaTo16kMono(file) {
 
 async function getLocalTranscriber() {
   if (localTranscriber) return localTranscriber;
-  setVideoProgress('Loading the free Whisper model… first use is the slow one.', 18);
 
-  const mod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1');
+  if (!navigator.gpu) {
+    throw new Error('Fast local transcription needs WebGPU on this phone. Your browser is not exposing it, and the CPU fallback is intentionally disabled because it can take 10+ minutes. Try the latest Chrome, or use Paste transcript/caption instead.');
+  }
+
+  setVideoProgress('Starting GPU transcription engine…', 18);
+
+  // Transformers.js v4 has a newer WebGPU runtime. Keep everything in-browser.
+  const mod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0');
   const { pipeline, env } = mod;
   env.allowLocalModels = false;
   env.useBrowserCache = true;
@@ -542,29 +548,59 @@ async function getLocalTranscriber() {
   const progress_callback = info => {
     if (!info) return;
     const p = Number(info.progress);
-    if (Number.isFinite(p)) setVideoProgress(`Downloading speech model… ${Math.round(p)}%`, 18 + p * 0.32);
-    else if (info.status === 'ready') setVideoProgress('Speech model ready.', 52);
+    if (Number.isFinite(p)) {
+      setVideoProgress(`Downloading speech model… ${Math.round(p)}%`, 18 + p * 0.30);
+    } else if (info.status === 'ready') {
+      setVideoProgress('Speech model ready on GPU.', 50);
+    }
   };
 
-  const model = 'onnx-community/whisper-tiny.en';
-  if (navigator.gpu) {
-    try {
-      localTranscriber = await pipeline('automatic-speech-recognition', model, {
+  try {
+    localTranscriber = await pipeline(
+      'automatic-speech-recognition',
+      'Xenova/whisper-tiny.en',
+      {
         device: 'webgpu',
-        dtype: 'q8',
+        dtype: 'q4',
         progress_callback
-      });
-      return localTranscriber;
-    } catch (e) {
-      console.warn('WebGPU Whisper unavailable, falling back to WASM.', e);
-    }
+      }
+    );
+    return localTranscriber;
+  } catch (e) {
+    console.error('WebGPU Whisper failed', e);
+    throw new Error('Your browser reported WebGPU, but Whisper could not start on the GPU. I stopped instead of falling back to the very slow CPU mode. Update Chrome and try again, or use Paste transcript/caption for this video.');
+  }
+}
+
+async function transcribeAudioInChunks(transcriber, audio, duration) {
+  // Whisper works naturally on short windows. Doing the splitting ourselves lets the UI
+  // show real progress and avoids one giant opaque inference call on mobile.
+  const sampleRate = 16000;
+  const chunkSeconds = 20;
+  const chunkSamples = chunkSeconds * sampleRate;
+  const total = Math.max(1, Math.ceil(audio.length / chunkSamples));
+  const parts = [];
+  const started = performance.now();
+
+  for (let i = 0; i < total; i++) {
+    const a = i * chunkSamples;
+    const b = Math.min(audio.length, (i + 1) * chunkSamples);
+    const chunk = audio.slice(a, b);
+    const pct = 52 + Math.round((i / total) * 42);
+    const elapsed = (performance.now() - started) / 1000;
+    const estimate = i > 0 ? Math.max(0, Math.round((elapsed / i) * (total - i))) : null;
+    const eta = estimate != null ? ` · about ${estimate}s left` : '';
+    setVideoProgress(`Transcribing part ${i + 1} of ${total} on GPU${eta}`, pct);
+
+    const out = await transcriber(chunk);
+    const text = String(out?.text || '').trim();
+    if (text) parts.push(text);
+
+    // Yield so Chrome can paint the progress update and stay responsive.
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
-  localTranscriber = await pipeline('automatic-speech-recognition', model, {
-    dtype: 'q8',
-    progress_callback
-  });
-  return localTranscriber;
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 function waitForEvent(target, event) {
@@ -739,7 +775,7 @@ function useVideoTranscriptAsRecipe() {
 async function transcribeVideoLocally() {
   const file = $('videoFileInput').files?.[0];
   if (!file) return setVideoProgress('Choose a downloaded or screen-recorded recipe video first.', 100, true);
-  if (file.size > 350 * 1024 * 1024) return setVideoProgress('That file is very large. For phone-friendly processing, use a video under about 350 MB.', 100, true);
+  if (file.size > 250 * 1024 * 1024) return setVideoProgress('That file is very large. For phone-friendly processing, use a video under about 250 MB.', 100, true);
 
   $('transcribeVideoBtn').disabled = true;
   $('transcribeVideoBtn').textContent = 'Working locally…';
@@ -748,18 +784,24 @@ async function transcribeVideoLocally() {
   $('videoProgressBar').style.width = '4%';
 
   try {
+    if (!navigator.gpu) {
+      throw new Error('Fast local transcription needs WebGPU. This browser is not exposing it, so I stopped instead of making you wait 10+ minutes on CPU. Update Chrome and try again, or use Paste transcript/caption.');
+    }
+
     setVideoProgress('Reading the audio track on this phone…', 7);
     const { audio, duration } = await decodeMediaTo16kMono(file);
-    setVideoProgress(`Audio ready (${Math.round(duration)} sec). Loading speech model…`, 15);
+    if (duration > 180) throw new Error('For the free phone-local importer, keep videos under 3 minutes. Trim a longer video first.');
+
+    setVideoProgress(`Audio ready (${Math.round(duration)} sec). Loading the GPU speech model…`, 15);
     const transcriber = await getLocalTranscriber();
-    setVideoProgress('Transcribing locally… keep this page open.', 55);
-    const result = await transcriber(audio, { chunk_length_s: 30, stride_length_s: 5 });
-    const transcript = String(result?.text || '').trim();
+    setVideoProgress('GPU model ready. Starting transcription…', 52);
+    const transcript = await transcribeAudioInChunks(transcriber, audio, duration);
     if (!transcript) throw new Error('The model did not hear usable speech. Check that your screen recording included device audio.');
     $('videoTranscript').value = transcript;
 
     if ($('scanVideoText').checked && String(file.type).startsWith('video/')) {
       try {
+        setVideoProgress('Transcript ready. Scanning a few frames for visible text…', 95);
         const ocr = await scanVisibleVideoText(file);
         $('videoOcrText').value = ocr;
         $('videoOcrDetails').classList.toggle('hidden', !ocr);
