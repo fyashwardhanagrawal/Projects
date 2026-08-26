@@ -1,0 +1,12 @@
+{
+  "name": "Our Recipes",
+  "short_name": "Recipes",
+  "description": "A shared cookbook with smart meal suggestions.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fff8ef",
+  "theme_color": "#fff8ef",
+  "icons": [
+    {"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
+}

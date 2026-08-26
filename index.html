@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#fff8ef" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Our Recipes" />
+  <title>Our Recipes</title>
+  <meta name="description" content="A shared recipe cookbook for two." />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main id="setupView" class="shell auth-shell hidden">
+    <section class="auth-card">
+      <div class="auth-mark">🍲</div>
+      <p class="eyebrow">ONE-TIME SETUP</p>
+      <h1>Connect Supabase</h1>
+      <p>This build is ready for shared sync, but its Supabase URL and public anon key still need to be placed in <code>config.js</code>.</p>
+      <p class="hint">The anon key is designed for browser apps. Row Level Security in the included SQL protects your cookbook.</p>
+    </section>
+  </main>
+
+  <main id="authView" class="shell auth-shell hidden">
+    <section class="auth-card">
+      <div class="auth-mark">🍳</div>
+      <p class="eyebrow">OUR KITCHEN</p>
+      <h1>Our Recipes</h1>
+      <p>One shared cookbook. Two phones. No recipe archaeology.</p>
+      <form id="authForm" class="panel auth-form">
+        <label>Email</label>
+        <input id="emailInput" type="email" autocomplete="email" required placeholder="you@example.com" />
+        <label>Password</label>
+        <input id="passwordInput" type="password" autocomplete="current-password" minlength="6" required placeholder="At least 6 characters" />
+        <button class="primary wide" type="submit">Sign in</button>
+        <button class="secondary wide" id="signUpBtn" type="button">Create account</button>
+      </form>
+      <p id="authMessage" class="status-message"></p>
+    </section>
+  </main>
+
+  <main id="householdView" class="shell auth-shell hidden">
+    <section class="auth-card">
+      <div class="auth-mark">🥘</div>
+      <p class="eyebrow">SHARED COOKBOOK</p>
+      <h1>Connect your kitchen</h1>
+      <p>One of you creates the cookbook. The other joins using the code.</p>
+      <div class="stack-gap">
+        <button id="createHouseholdBtn" class="primary wide" type="button">Create “Our Recipes”</button>
+        <div class="or-line"><span>or</span></div>
+        <label>Join code</label>
+        <input id="joinCodeInput" maxlength="8" autocapitalize="characters" placeholder="AB12CD34" />
+        <button id="joinHouseholdBtn" class="secondary wide" type="button">Join cookbook</button>
+      </div>
+      <p id="householdMessage" class="status-message"></p>
+      <button class="text-btn" id="householdSignOutBtn" type="button">Sign out</button>
+    </section>
+  </main>
+
+  <main id="appView" class="shell hidden">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow" id="cookbookName">OUR KITCHEN</p>
+        <h1>Our Recipes</h1>
+      </div>
+      <div class="top-actions">
+        <button id="shareCodeBtn" class="icon-btn smallish" aria-label="Share cookbook code">↗</button>
+        <button id="addBtn" class="icon-btn" aria-label="Add recipe">＋</button>
+      </div>
+    </header>
+
+    <section class="hero">
+      <div>
+        <p class="hero-kicker">Tonight, maybe?</p>
+        <h2>What are we cooking?</h2>
+        <p>Save it once. Find it when you're hungry.</p>
+      </div>
+      <div class="hero-emoji">🍲</div>
+    </section>
+
+    <section class="cookbook-assistant" aria-labelledby="assistantTitle">
+      <div class="assistant-head">
+        <div>
+          <p class="eyebrow">ASK YOUR COOKBOOK</p>
+          <h3 id="assistantTitle">What should we make?</h3>
+        </div>
+        <span class="assistant-spark">✨</span>
+      </div>
+      <form id="assistantForm" class="assistant-form">
+        <input id="assistantInput" type="search" autocomplete="off" placeholder="e.g. Give me 2 dinners under 30 min" />
+        <button class="primary assistant-go" type="submit">Find ideas</button>
+      </form>
+      <div class="assistant-prompts">
+        <button type="button" class="assistant-prompt" data-prompt="Give me 2 dinners this week">2 dinners</button>
+        <button type="button" class="assistant-prompt" data-prompt="Give me 2 lunches this week">2 lunches</button>
+        <button type="button" class="assistant-prompt" data-prompt="Show me quick meals under 30 minutes">Quick meals</button>
+        <button type="button" class="assistant-prompt" data-prompt="Surprise me with 3 recipes">Surprise me</button>
+      </div>
+      <p class="assistant-hint">Try: “What can I make with paneer, peppers and tortillas?” Suggestions use only recipes saved in this cookbook.</p>
+      <div id="assistantResults" class="assistant-results hidden"></div>
+    </section>
+
+    <section class="search-row">
+      <input id="searchInput" type="search" placeholder="Search recipes, tags, ingredients…" autocomplete="off" />
+      <button id="filterFavBtn" class="pill-btn" type="button">♡ Favorites</button>
+    </section>
+
+    <div class="chips" id="filterChips">
+      <button class="chip active" data-filter="all">All</button>
+      <button class="chip" data-filter="Indian">Indian</button>
+      <button class="chip" data-filter="Quick">Quick</button>
+      <button class="chip" data-filter="Instant Pot">Instant Pot</button>
+      <button class="chip" data-filter="Air Fryer">Air Fryer</button>
+      <button class="chip" data-filter="Dessert">Dessert</button>
+    </div>
+
+    <div class="section-head">
+      <h3>Recipes</h3>
+      <span class="count-badge" id="recipeCount">0</span>
+    </div>
+
+    <section id="syncBanner" class="sync-banner hidden">Working…</section>
+    <section id="recipeGrid" class="recipe-grid"></section>
+    <section id="emptyState" class="empty hidden">
+      <div class="empty-icon">🥄</div>
+      <h3>No recipes here yet</h3>
+      <p>Add your first recipe or paste one you've found online.</p>
+      <button id="emptyAddBtn" class="primary" type="button">Add a recipe</button>
+    </section>
+
+    <footer class="app-footer">
+      <button id="signOutBtn" class="text-btn" type="button">Sign out</button>
+    </footer>
+  </main>
+
+  <button id="fab" class="fab hidden" aria-label="Add recipe">＋</button>
+
+  <dialog id="addDialog" class="sheet">
+    <form method="dialog" class="sheet-card" id="recipeForm">
+      <div class="sheet-grabber"></div>
+      <div class="sheet-head">
+        <div><p class="eyebrow">ADD TO COOKBOOK</p><h2>New recipe</h2></div>
+        <button class="icon-btn small" type="button" id="closeDialog">×</button>
+      </div>
+
+      <div class="add-modes">
+        <button type="button" class="mode active" data-mode="manual">✍️ Manual</button>
+        <button type="button" class="mode" data-mode="link">🔗 Link</button>
+        <button type="button" class="mode" data-mode="paste">📋 Paste</button>
+      </div>
+
+      <div id="linkPanel" class="panel hidden">
+        <label>Recipe or social link</label>
+        <input id="sourceUrl" type="url" placeholder="https://instagram.com/..." />
+        <button type="button" class="primary wide" id="importLinkBtn">Import recipe from link</button>
+        <p id="importLinkStatus" class="status-message"></p>
+        <p class="hint">Recipe websites usually import automatically. Instagram, TikTok, YouTube and other social sites may expose only partial details, so you can review or paste the caption/transcript before saving.</p>
+      </div>
+
+      <div id="pastePanel" class="panel hidden">
+        <label>Paste recipe text</label>
+        <textarea id="pasteText" rows="7" placeholder="Paste ingredients, directions, caption, transcript…"></textarea>
+        <button type="button" class="secondary" id="parsePasteBtn">Use pasted text</button>
+      </div>
+
+      <div id="manualPanel" class="panel">
+        <p id="recipeImportNotice" class="import-notice hidden"></p>
+        <label>Recipe name</label>
+        <input id="titleInput" required placeholder="e.g. Gujarati Dal" />
+
+        <div class="two-col">
+          <div><label>Prep minutes</label><input id="prepInput" type="number" min="0" placeholder="10" /></div>
+          <div><label>Cook minutes</label><input id="cookInput" type="number" min="0" placeholder="25" /></div>
+        </div>
+
+        <label>Ingredients</label>
+        <textarea id="ingredientsInput" rows="6" placeholder="One ingredient per line"></textarea>
+
+        <label>Instructions</label>
+        <textarea id="instructionsInput" rows="7" placeholder="One step per line"></textarea>
+
+        <label>Tags</label>
+        <input id="tagsInput" placeholder="Indian, Quick, Instant Pot" />
+
+        <label>Notes</label>
+        <textarea id="notesInput" rows="3" placeholder="Anything you want to remember"></textarea>
+      </div>
+
+      <button type="submit" class="primary wide">Save recipe</button>
+    </form>
+  </dialog>
+
+  <dialog id="viewDialog" class="sheet">
+    <article class="sheet-card recipe-detail">
+      <div class="sheet-grabber"></div>
+      <div class="sheet-head">
+        <div><p class="eyebrow">RECIPE</p><h2 id="viewTitle"></h2></div>
+        <button class="icon-btn small" type="button" id="closeView">×</button>
+      </div>
+      <div id="viewMeta" class="meta"></div>
+      <div id="viewTags" class="chips detail-chips"></div>
+      <section><h3>Ingredients</h3><ul id="viewIngredients"></ul></section>
+      <section><h3>Instructions</h3><ol id="viewInstructions"></ol></section>
+      <section id="notesSection"><h3>Notes</h3><p id="viewNotes"></p></section>
+      <a id="viewSource" class="source-link hidden" target="_blank" rel="noopener">Open original source ↗</a>
+      <div class="detail-actions">
+        <button id="favoriteBtn" class="secondary" type="button">♡ Favorite</button>
+        <button id="deleteBtn" class="danger" type="button">Delete</button>
+      </div>
+    </article>
+  </dialog>
+
+  <dialog id="inviteDialog" class="center-dialog">
+    <article class="invite-card">
+      <div class="sheet-head">
+        <div><p class="eyebrow">YOUR SHARED COOKBOOK</p><h2>Invite your wife</h2></div>
+        <button class="icon-btn small" id="closeInvite" type="button">×</button>
+      </div>
+      <p>After she creates her account, she can enter this code:</p>
+      <div id="inviteCode" class="invite-code">--------</div>
+      <button id="copyInviteBtn" class="primary wide" type="button">Copy code</button>
+    </article>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
