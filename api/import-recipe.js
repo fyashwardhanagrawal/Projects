@@ -89,6 +89,53 @@ function durationMinutes(value) {
   return mins || null;
 }
 
+
+function servingsNumber(value) {
+  if (value == null) return null;
+  if (Array.isArray(value)) {
+    for (const v of value) {
+      const n = servingsNumber(v);
+      if (n) return n;
+    }
+    return null;
+  }
+  if (typeof value === 'number') return value > 0 ? value : null;
+  const text = stripTags(String(value));
+  const m = text.match(/(\d+(?:\.\d+)?)/);
+  return m ? Number(m[1]) : null;
+}
+
+function socialHostName(host = '') {
+  if (/(^|\.)instagram\.com$/i.test(host)) return 'Instagram';
+  if (/(^|\.)tiktok\.com$/i.test(host)) return 'TikTok';
+  if (/(^|\.)(youtube\.com|youtu\.be)$/i.test(host)) return 'YouTube';
+  if (/(^|\.)facebook\.com$/i.test(host)) return 'Facebook';
+  return null;
+}
+
+function cleanSocialDescription(text = '') {
+  let t = stripTags(text);
+  // Instagram often prefixes OG descriptions with likes/comments and account/date metadata.
+  const quoted = t.match(/:\s*[“\"]([\s\S]+?)[”\"]\s*$/);
+  if (quoted?.[1]) t = quoted[1].trim();
+  return t;
+}
+
+function parseMarkedSocialRecipe(text = '') {
+  const raw = cleanSocialDescription(text);
+  if (!raw) return { ingredients: [], instructions: [] };
+  const ingMatch = raw.match(/ingredients?\s*[:\-]\s*([\s\S]*?)(?=\b(?:instructions?|directions?|method|steps?)\s*[:\-]|$)/i);
+  const stepMatch = raw.match(/(?:instructions?|directions?|method|steps?)\s*[:\-]\s*([\s\S]*)$/i);
+  const splitItems = value => String(value || '')
+    .split(/\s*[•▪◦●]\s*|\s*;\s*|\s+\d+[.)]\s+/)
+    .map(x => x.trim().replace(/^[-–—]\s*/, ''))
+    .filter(x => x.length > 1);
+  return {
+    ingredients: ingMatch ? splitItems(ingMatch[1]).slice(0, 60) : [],
+    instructions: stepMatch ? splitItems(stepMatch[1]).slice(0, 40) : []
+  };
+}
+
 function flattenInstructions(value, out = []) {
   if (!value) return out;
   if (typeof value === 'string') {
@@ -182,6 +229,7 @@ function normalizeRecipe(recipe, url, html) {
     prep_minutes: durationMinutes(recipe.prepTime),
     cook_minutes: durationMinutes(recipe.cookTime),
     total_minutes: durationMinutes(recipe.totalTime),
+    servings: servingsNumber(recipe.recipeYield),
     ingredients,
     instructions,
     tags: mergeTags(recipe),
@@ -238,6 +286,7 @@ function extractWprmRecipe(html, url) {
     prep_minutes: numericClassValue(html, 'wprm-recipe-prep_time-minutes') || numericClassValue(html, 'wprm-recipe-prep_time'),
     cook_minutes: numericClassValue(html, 'wprm-recipe-cook_time-minutes') || numericClassValue(html, 'wprm-recipe-cook_time'),
     total_minutes: numericClassValue(html, 'wprm-recipe-total_time-minutes') || numericClassValue(html, 'wprm-recipe-total_time'),
+    servings: numericClassValue(html, 'wprm-recipe-servings'),
     ingredients: ingredients.slice(0, 100),
     instructions: instructions.slice(0, 100),
     tags: [...new Set([cuisine, course].filter(Boolean))],
@@ -248,25 +297,31 @@ function extractWprmRecipe(html, url) {
   };
 }
 
-function fallbackResult(url, html) {
+function fallbackResult(url, html, forcedMessage = '') {
   const host = new URL(url).hostname.replace(/^www\./, '');
-  const description = metaContent(html, ['description', 'og:description', 'twitter:description']);
-  const social = /(^|\.)(instagram\.com|tiktok\.com|youtube\.com|youtu\.be|facebook\.com)$/i.test(host);
+  const socialName = socialHostName(host);
+  const descriptionRaw = metaContent(html, ['description', 'og:description', 'twitter:description']);
+  const description = socialName ? cleanSocialDescription(descriptionRaw) : descriptionRaw;
+  const marked = socialName ? parseMarkedSocialRecipe(description) : { ingredients: [], instructions: [] };
+  const gotRecipeText = marked.ingredients.length > 0 || marked.instructions.length > 0;
   return {
     ok: true,
     partial: true,
     source_url: url,
-    title: titleFromHtml(html) || 'Imported link',
+    title: titleFromHtml(html) || (socialName ? `${socialName} recipe` : 'Imported link'),
     prep_minutes: null,
     cook_minutes: null,
     total_minutes: null,
-    ingredients: [],
-    instructions: [],
-    tags: social ? ['Social'] : [],
+    servings: null,
+    ingredients: marked.ingredients,
+    instructions: marked.instructions,
+    tags: socialName ? [socialName, 'Social'] : [],
     notes: description ? stripTags(description) : null,
-    message: social
-      ? 'Saved what the social site exposed, but it did not provide full recipe ingredients/instructions. Paste the caption or transcript for now.'
-      : 'This page did not expose structured recipe data. The source and page details were imported; you can fill or paste the missing recipe text.'
+    message: forcedMessage || (socialName
+      ? (gotRecipeText
+          ? `${socialName} exposed part of the caption, so I pulled the recipe text I could find. Review it before saving.`
+          : `${socialName} did not expose full recipe ingredients/instructions to the importer. The source and any public caption details were kept; paste the caption/transcript when needed.`)
+      : 'This page did not expose structured recipe data. The source and page details were imported; you can fill or paste the missing recipe text.')
   };
 }
 
@@ -284,13 +339,17 @@ module.exports = async function handler(req, res) {
       signal: controller.signal,
       redirect: 'follow',
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; OurRecipes/0.3; +https://vercel.app)',
+        'User-Agent': 'Mozilla/5.0 (compatible; OurRecipes/0.5; +https://vercel.app)',
         'Accept': 'text/html,application/xhtml+xml'
       }
     });
     clearTimeout(timer);
 
-    if (!response.ok) return send(res, 422, { error: `The source returned HTTP ${response.status}.` });
+    if (!response.ok) {
+      const socialName = socialHostName(url.hostname);
+      if (socialName) return send(res, 200, fallbackResult(url.toString(), '', `${socialName} blocked automated reading of this post (HTTP ${response.status}). I kept the source link; paste the caption or transcript to finish the recipe.`));
+      return send(res, 422, { error: `The source returned HTTP ${response.status}.` });
+    }
     const type = response.headers.get('content-type') || '';
     if (!type.includes('text/html') && !type.includes('application/xhtml+xml')) {
       return send(res, 422, { error: 'That link did not return a web page I can import.' });
@@ -303,6 +362,11 @@ module.exports = async function handler(req, res) {
     const wprm = extractWprmRecipe(html, finalUrl);
     return send(res, 200, wprm || fallbackResult(finalUrl, html));
   } catch (e) {
+    const socialName = socialHostName(url.hostname);
+    if (socialName) {
+      const reason = e?.name === 'AbortError' ? 'timed out' : 'blocked automated reading';
+      return send(res, 200, fallbackResult(url.toString(), '', `${socialName} ${reason}. I kept the source link; paste the caption or transcript and the app can still turn that text into a saved recipe.`));
+    }
     const message = e?.name === 'AbortError'
       ? 'That page took too long to respond.'
       : 'I could not read that page. Some sites block automated recipe imports.';
