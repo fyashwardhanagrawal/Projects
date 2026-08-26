@@ -417,6 +417,10 @@ function openAdd(mode = 'manual') {
   $('recipeForm').reset();
   setStatus('importLinkStatus', '');
   setStatus('recipeImportNotice', '');
+  setVideoProgress('', 4);
+  $('videoProgressWrap').classList.add('hidden');
+  $('videoTranscriptWrap').classList.add('hidden');
+  $('videoOcrDetails').classList.add('hidden');
   setMode(mode);
   $('addDialog').showModal();
   setTimeout(() => $('titleInput').focus(), 100);
@@ -426,6 +430,7 @@ function setMode(mode) {
   document.querySelectorAll('.mode').forEach(x => x.classList.toggle('active', x.dataset.mode === mode));
   $('linkPanel').classList.toggle('hidden', mode !== 'link');
   $('pastePanel').classList.toggle('hidden', mode !== 'paste');
+  $('videoPanel').classList.toggle('hidden', mode !== 'video');
 }
 
 async function importFromLink() {
@@ -474,6 +479,309 @@ async function importFromLink() {
     $('importLinkBtn').textContent = 'Import recipe from link';
   }
 }
+
+let localTranscriber = null;
+let localOcrWorker = null;
+
+function setVideoProgress(message, percent = null, isError = false) {
+  $('videoProgressWrap').classList.remove('hidden');
+  $('videoStatus').textContent = message || '';
+  $('videoStatus').classList.toggle('error', isError);
+  if (percent != null) $('videoProgressBar').style.width = `${Math.max(4, Math.min(100, percent))}%`;
+}
+
+function cleanVideoTitle(name = '') {
+  return String(name)
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80) || 'Video recipe';
+}
+
+async function decodeMediaTo16kMono(file) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  if (!AudioCtx || !OfflineCtx) throw new Error('This browser cannot decode video audio locally. Try Chrome/Safari updated to the latest version.');
+
+  const ctx = new AudioCtx();
+  try {
+    const raw = await file.arrayBuffer();
+    const decoded = await ctx.decodeAudioData(raw.slice(0));
+    if (!decoded?.duration || decoded.duration < 0.2) throw new Error('No usable audio track was found in that file.');
+    if (decoded.duration > 300) throw new Error('For now, keep social recipe videos under 5 minutes so phone memory does not get roasted.');
+
+    const targetRate = 16000;
+    const frames = Math.ceil(decoded.duration * targetRate);
+    const offline = new OfflineCtx(1, frames, targetRate);
+    const source = offline.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offline.destination);
+    source.start(0);
+    const rendered = await offline.startRendering();
+    return { audio: new Float32Array(rendered.getChannelData(0)), duration: decoded.duration };
+  } catch (e) {
+    if (/decode|EncodingError|Unable to decode/i.test(String(e?.message || e))) {
+      throw new Error('I could not read the audio track from this video on your browser. A downloaded MP4 usually works better than some screen-recording formats.');
+    }
+    throw e;
+  } finally {
+    try { await ctx.close(); } catch {}
+  }
+}
+
+async function getLocalTranscriber() {
+  if (localTranscriber) return localTranscriber;
+  setVideoProgress('Loading the free Whisper model… first use is the slow one.', 18);
+
+  const mod = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1');
+  const { pipeline, env } = mod;
+  env.allowLocalModels = false;
+  env.useBrowserCache = true;
+
+  const progress_callback = info => {
+    if (!info) return;
+    const p = Number(info.progress);
+    if (Number.isFinite(p)) setVideoProgress(`Downloading speech model… ${Math.round(p)}%`, 18 + p * 0.32);
+    else if (info.status === 'ready') setVideoProgress('Speech model ready.', 52);
+  };
+
+  const model = 'onnx-community/whisper-tiny.en';
+  if (navigator.gpu) {
+    try {
+      localTranscriber = await pipeline('automatic-speech-recognition', model, {
+        device: 'webgpu',
+        dtype: 'q8',
+        progress_callback
+      });
+      return localTranscriber;
+    } catch (e) {
+      console.warn('WebGPU Whisper unavailable, falling back to WASM.', e);
+    }
+  }
+
+  localTranscriber = await pipeline('automatic-speech-recognition', model, {
+    dtype: 'q8',
+    progress_callback
+  });
+  return localTranscriber;
+}
+
+function waitForEvent(target, event) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      target.removeEventListener(event, ok);
+      target.removeEventListener('error', bad);
+    };
+    const ok = () => { cleanup(); resolve(); };
+    const bad = () => { cleanup(); reject(new Error('Could not read frames from this video.')); };
+    target.addEventListener(event, ok, { once: true });
+    target.addEventListener('error', bad, { once: true });
+  });
+}
+
+async function seekVideo(video, time) {
+  if (Math.abs(video.currentTime - time) < 0.05) return;
+  video.currentTime = time;
+  await waitForEvent(video, 'seeked');
+}
+
+function dedupeOcrLines(texts = []) {
+  const seen = new Set();
+  const out = [];
+  for (const block of texts) {
+    for (const raw of String(block || '').split(/\n+/)) {
+      const line = raw.replace(/\s+/g, ' ').trim();
+      if (line.length < 3) continue;
+      const key = line.toLowerCase().replace(/[^a-z0-9¼½¾⅓⅔]+/g, ' ').trim();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(line);
+    }
+  }
+  return out;
+}
+
+async function scanVisibleVideoText(file) {
+  setVideoProgress('Loading local on-screen text scanner…', 72);
+  const { createWorker } = await import('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.esm.min.js');
+  if (!localOcrWorker) {
+    localOcrWorker = await createWorker('eng', 1, {
+      logger: m => {
+        if (m.status === 'recognizing text' && Number.isFinite(Number(m.progress))) {
+          setVideoProgress(`Scanning on-screen text… ${Math.round(Number(m.progress) * 100)}%`, 74 + Number(m.progress) * 20);
+        }
+      }
+    });
+  }
+
+  const url = URL.createObjectURL(file);
+  const video = document.createElement('video');
+  video.src = url;
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'metadata';
+
+  try {
+    await waitForEvent(video, 'loadedmetadata');
+    const duration = Math.max(1, video.duration || 1);
+    const count = Math.min(7, Math.max(3, Math.ceil(duration / 10)));
+    const times = Array.from({ length: count }, (_, i) => Math.min(duration - 0.1, Math.max(0, ((i + 0.5) / count) * duration)));
+    const canvas = document.createElement('canvas');
+    const maxWidth = 720;
+    const scale = Math.min(1, maxWidth / Math.max(1, video.videoWidth || maxWidth));
+    canvas.width = Math.max(1, Math.round((video.videoWidth || maxWidth) * scale));
+    canvas.height = Math.max(1, Math.round((video.videoHeight || 1280) * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const blocks = [];
+
+    for (let i = 0; i < times.length; i++) {
+      setVideoProgress(`Scanning visible text… frame ${i + 1} of ${times.length}`, 74 + (i / times.length) * 20);
+      await seekVideo(video, times[i]);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const result = await localOcrWorker.recognize(canvas);
+      if (result?.data?.text) blocks.push(result.data.text);
+    }
+    return dedupeOcrLines(blocks).join('\n');
+  } finally {
+    URL.revokeObjectURL(url);
+    video.removeAttribute('src');
+    video.load();
+  }
+}
+
+const SPOKEN_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\d+\s+\d+\/\d+|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞]|one|two|three|four|five|six|seven|eight|nine|ten|half|quarter)`;
+const SPOKEN_UNIT = String.raw`(?:cups?|tablespoons?|tbsp|teaspoons?|tsp|ounces?|oz|pounds?|lbs?|grams?|g|kilograms?|kg|milliliters?|ml|liters?|l|cloves?|cans?|packages?|packets?|pinches?|handfuls?|pieces?|slices?)`;
+
+function narrationSentences(text = '') {
+  return String(text)
+    .replace(/\r/g, '\n')
+    .split(/(?:\n+|(?<=[.!?])\s+)/)
+    .map(x => x.replace(/\s+/g, ' ').trim())
+    .filter(x => x.length > 2);
+}
+
+function ingredientCandidatesFromNarration(text = '') {
+  const out = [];
+  const seen = new Set();
+  const linesToCheck = narrationSentences(text);
+  const amountRe = new RegExp(`(?:^|\\b)(${SPOKEN_NUMBER})\\s*(?:of\\s+)?(${SPOKEN_UNIT})?\\s+(?:of\\s+)?([^.;!?]{2,80})`, 'ig');
+
+  for (const line of linesToCheck) {
+    amountRe.lastIndex = 0;
+    let m;
+    while ((m = amountRe.exec(line))) {
+      let tail = m[3]
+        .replace(/\b(?:and then|then|before|after|until|into|in a|in the|to the|and cook|and stir|and mix|and fry|and bake|and simmer)\b.*$/i, '')
+        .replace(/\b(?:we need|you need|you'll need|i use|use|using|add|adding|take|start with|with)\b\s*/gi, '')
+        .trim();
+      if (!tail || tail.split(/\s+/).length > 12) continue;
+      const unit = m[2] || '';
+      const candidate = `${m[1]}${unit ? ` ${unit}` : ''} ${tail}`.replace(/\s+/g, ' ').trim();
+      const key = candidate.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); out.push(candidate); }
+    }
+  }
+
+  // OCR often returns clean ingredient lines, so keep quantity-looking lines even when punctuation is sparse.
+  for (const line of String(text).split(/\n+/)) {
+    const clean = line.replace(/^[-•*]\s*/, '').trim();
+    if (!clean || !new RegExp(`^${SPOKEN_NUMBER}\\s*(?:${SPOKEN_UNIT})?\\b`, 'i').test(clean)) continue;
+    const key = clean.toLowerCase();
+    if (!seen.has(key)) { seen.add(key); out.push(clean); }
+  }
+  return out.slice(0, 40);
+}
+
+function instructionCandidatesFromNarration(text = '') {
+  const action = /\b(add|mix|stir|cook|heat|bake|fry|sauté|saute|boil|simmer|pour|combine|chop|dice|slice|season|whisk|blend|roast|air\s*fry|pressure\s*cook|serve|garnish|marinate|fold|toss|drain|preheat|toast|grill|place|transfer|let|rest|flip|sprinkle|top|reduce)\b/i;
+  const seen = new Set();
+  return narrationSentences(text)
+    .filter(x => action.test(x) && x.split(/\s+/).length >= 3)
+    .map(x => x.replace(/^\s*(?:so|then|next|now|and)\s*[,.-]?\s*/i, '').trim())
+    .filter(x => {
+      const key = x.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, 35);
+}
+
+function useVideoTranscriptAsRecipe() {
+  const transcript = $('videoTranscript').value.trim();
+  const ocr = $('videoOcrText').value.trim();
+  if (!transcript && !ocr) return setVideoProgress('There is no transcript or on-screen text to use yet.', 100, true);
+
+  const combined = [ocr, transcript].filter(Boolean).join('\n');
+  const ingredients = ingredientCandidatesFromNarration(combined);
+  const instructions = instructionCandidatesFromNarration(transcript || combined);
+
+  if (!$('titleInput').value) {
+    const file = $('videoFileInput').files?.[0];
+    $('titleInput').value = cleanVideoTitle(file?.name || 'Video recipe');
+  }
+  if (ingredients.length) $('ingredientsInput').value = ingredients.join('\n');
+  if (instructions.length) $('instructionsInput').value = instructions.join('\n');
+  if ($('videoSourceUrl').value.trim()) $('sourceUrl').value = $('videoSourceUrl').value.trim();
+
+  const partial = !ingredients.length || !instructions.length;
+  setMode('manual');
+  setStatus(
+    'recipeImportNotice',
+    partial
+      ? 'Video transcribed locally. I could only structure part of the recipe, so review the transcript and fill any missing quantities before saving.'
+      : 'Video transcribed locally and turned into a draft recipe. Review quantities and steps before saving.',
+    partial
+  );
+}
+
+async function transcribeVideoLocally() {
+  const file = $('videoFileInput').files?.[0];
+  if (!file) return setVideoProgress('Choose a downloaded or screen-recorded recipe video first.', 100, true);
+  if (file.size > 350 * 1024 * 1024) return setVideoProgress('That file is very large. For phone-friendly processing, use a video under about 350 MB.', 100, true);
+
+  $('transcribeVideoBtn').disabled = true;
+  $('transcribeVideoBtn').textContent = 'Working locally…';
+  $('videoTranscriptWrap').classList.add('hidden');
+  $('videoOcrDetails').classList.add('hidden');
+  $('videoProgressBar').style.width = '4%';
+
+  try {
+    setVideoProgress('Reading the audio track on this phone…', 7);
+    const { audio, duration } = await decodeMediaTo16kMono(file);
+    setVideoProgress(`Audio ready (${Math.round(duration)} sec). Loading speech model…`, 15);
+    const transcriber = await getLocalTranscriber();
+    setVideoProgress('Transcribing locally… keep this page open.', 55);
+    const result = await transcriber(audio, { chunk_length_s: 30, stride_length_s: 5 });
+    const transcript = String(result?.text || '').trim();
+    if (!transcript) throw new Error('The model did not hear usable speech. Check that your screen recording included device audio.');
+    $('videoTranscript').value = transcript;
+
+    if ($('scanVideoText').checked && String(file.type).startsWith('video/')) {
+      try {
+        const ocr = await scanVisibleVideoText(file);
+        $('videoOcrText').value = ocr;
+        $('videoOcrDetails').classList.toggle('hidden', !ocr);
+      } catch (e) {
+        console.warn('OCR scan failed', e);
+        $('videoOcrText').value = '';
+      }
+    } else {
+      $('videoOcrText').value = '';
+    }
+
+    $('videoTranscriptWrap').classList.remove('hidden');
+    setVideoProgress('Transcript ready. Review it, then turn it into a recipe.', 100);
+  } catch (e) {
+    console.error(e);
+    setVideoProgress(e?.message || 'Local transcription failed on this device.', 100, true);
+  } finally {
+    $('transcribeVideoBtn').disabled = false;
+    $('transcribeVideoBtn').textContent = 'Transcribe on this phone';
+  }
+}
+
 
 function parsePastedText() {
   const raw = $('pasteText').value.trim();
@@ -842,6 +1150,8 @@ function wireEvents() {
   document.querySelectorAll('.mode').forEach(m => m.addEventListener('click', () => setMode(m.dataset.mode)));
   $('parsePasteBtn').addEventListener('click', parsePastedText);
   $('importLinkBtn').addEventListener('click', importFromLink);
+  $('transcribeVideoBtn').addEventListener('click', transcribeVideoLocally);
+  $('useVideoTranscriptBtn').addEventListener('click', useVideoTranscriptAsRecipe);
   $('addBtn').addEventListener('click', () => openAdd());
   $('fab').addEventListener('click', () => openAdd());
   $('emptyAddBtn').addEventListener('click', () => openAdd());

@@ -1,32 +1,40 @@
-# Our Recipes PWA v0.5
+# Our Recipes PWA v0.6
 
-A mobile-first shared recipe PWA for two people using Supabase + Vercel.
+A mobile-first shared recipe PWA for two people using Supabase + Vercel, with free local social-video transcription.
 
-## v0.5 adds
-- Recipe serving size import from structured recipe pages
-- Manual serving-size field when adding a recipe
-- `- / +` serving controls on recipe detail pages
-- Automatic ingredient scaling as servings change
-- Kitchen-friendly fractions such as 1½, 2¼, ¾
-- Practical measurement normalization:
-  - tsp → tbsp → cups when the conversion is clean
-  - mL/L → cups/tbsp/tsp
-  - grams/kg → oz/lb instead of forcing unreliable cup conversions
-  - countable ingredients such as eggs, onions, chilies and tortillas scale numerically
-  - quantity-free lines such as “salt to taste” are left unchanged
-- Original serving size is always preserved and can be reset
-- Older recipes without serving metadata can set their original servings directly from the recipe detail screen
-- No Supabase migration required: serving metadata is stored as an internal hidden recipe tag so the existing database keeps working
-- Improved Instagram/TikTok/YouTube/Facebook best-effort import behavior
-  - reads public page/caption metadata when the platform exposes it
-  - tries to recognize marked “Ingredients” / “Instructions” text in social descriptions
-  - if a platform blocks automated reading, the source link is still preserved and the UI clearly asks for a caption/transcript fallback
+## v0.6 adds: Free Local Social Video Import
 
-## Existing setup
-This build keeps the existing Supabase project and public key configuration. No SQL changes are required from v0.4.
+- New **Video** add mode for downloaded Instagram/TikTok/social recipe videos or screen recordings.
+- Extracts the audio track in the browser and resamples it to 16 kHz.
+- Runs **Whisper Tiny English locally in the browser** through Transformers.js.
+- No OpenAI key, transcription API, or per-video fee.
+- First use downloads the free speech model; later uses should reuse the browser cache.
+- Optional experimental on-screen text scan samples a few frames with Tesseract.js.
+- Turns transcript + visible text into a draft ingredient list and cooking steps for review.
+- Social source URL can still be saved with the final recipe.
+- Video itself is never uploaded to Supabase by this feature.
 
-## Updating Vercel
-Replace the files in the connected Git repository with the contents of this folder, keeping `api/import-recipe.js` inside the `api` folder. Commit to the production branch. Vercel should deploy the commit automatically.
+## Important limitations
 
-## Social import reality
-Normal recipe websites are the strongest import path because many publish Schema.org Recipe / JSON-LD data. Social platforms may restrict what a server can read from a public post. v0.5 therefore uses a best-effort path and preserves the source even when the full caption/video transcript is unavailable.
+- Keep the app open while a transcription is running.
+- Local transcription is compute-heavy; a short Reel may take seconds to minutes depending on the phone.
+- A screen recording must include device/media audio or Whisper will have nothing useful to transcribe.
+- Browser support for decoding a particular MP4/audio codec varies. A downloaded MP4 is often the most compatible input.
+- On-screen OCR is optional because it is slower and is best-effort.
+- Recipe structuring is heuristic and intentionally asks you to review quantities/steps instead of inventing missing measurements.
+- The speech model is English-focused. A multilingual Whisper model can be added later while staying free, at the cost of a larger download.
+
+## Existing v0.5 features remain
+
+- Shared two-account Supabase cookbook.
+- Recipe URL import through `/api/import-recipe`.
+- Ask Your Cookbook recommendations and ingredient matching.
+- Serving-size import and serving `− / +` controls.
+- Smart US kitchen measurements (cups/tbsp/tsp, oz/lb where appropriate).
+- Favorites, search, tags, notes, source links, manual/pasted-text entry, and PWA install support.
+
+## Deployment
+
+No new Supabase SQL is required. Replace the v0.5 repo files with this folder, keep `api/import-recipe.js` inside `api/`, commit to the Vercel-connected production branch, and Vercel should deploy automatically.
+
+Because v0.6 changes the service-worker cache name and claims clients immediately, fully closing/reopening the installed PWA after deployment should pick up the new shell more reliably.

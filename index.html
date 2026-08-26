@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Our Recipes" />
   <title>Our Recipes</title>
-  <meta name="description" content="A shared recipe cookbook for two." />
+  <meta name="description" content="A shared smart recipe cookbook for two." />
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -149,6 +149,7 @@
         <button type="button" class="mode active" data-mode="manual">✍️ Manual</button>
         <button type="button" class="mode" data-mode="link">🔗 Link</button>
         <button type="button" class="mode" data-mode="paste">📋 Paste</button>
+        <button type="button" class="mode" data-mode="video">🎥 Video</button>
       </div>
 
       <div id="linkPanel" class="panel hidden">
@@ -163,6 +164,33 @@
         <label>Paste recipe text</label>
         <textarea id="pasteText" rows="7" placeholder="Paste ingredients, directions, caption, transcript…"></textarea>
         <button type="button" class="secondary" id="parsePasteBtn">Use pasted text</button>
+      </div>
+
+      <div id="videoPanel" class="panel hidden video-import-panel">
+        <div class="local-badge">🔒 Processed on this device · $0 API cost</div>
+        <label>Instagram / TikTok / other recipe video</label>
+        <input id="videoFileInput" type="file" accept="video/*,audio/*" />
+        <label>Original social link <span class="optional">optional</span></label>
+        <input id="videoSourceUrl" type="url" placeholder="https://www.instagram.com/reel/…" />
+        <label class="check-row">
+          <input id="scanVideoText" type="checkbox" />
+          <span>Also scan a few frames for on-screen ingredient text <small>(slower, experimental)</small></span>
+        </label>
+        <button type="button" class="primary wide" id="transcribeVideoBtn">Transcribe on this phone</button>
+        <div id="videoProgressWrap" class="video-progress hidden" aria-live="polite">
+          <div class="video-progress-track"><div id="videoProgressBar" class="video-progress-bar"></div></div>
+          <p id="videoStatus" class="status-message"></p>
+        </div>
+        <div id="videoTranscriptWrap" class="hidden">
+          <label>Local transcript</label>
+          <textarea id="videoTranscript" rows="8" placeholder="Transcript will appear here. You can correct anything before importing."></textarea>
+          <details id="videoOcrDetails" class="ocr-details hidden">
+            <summary>On-screen text found</summary>
+            <textarea id="videoOcrText" rows="5"></textarea>
+          </details>
+          <button type="button" class="secondary wide" id="useVideoTranscriptBtn">Turn transcript into recipe</button>
+        </div>
+        <p class="hint">First use downloads a free Whisper speech model to your browser cache. Processing can take a while on a phone. The video is not uploaded to Supabase or a paid AI service.</p>
       </div>
 
       <div id="manualPanel" class="panel">

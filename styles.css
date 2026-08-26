@@ -56,7 +56,7 @@ input:focus, textarea:focus { border-color: #c89278; box-shadow: 0 0 0 3px rgba(
 .sheet::backdrop { background: rgba(22,18,16,.48); backdrop-filter: blur(3px); }
 .sheet-card { margin: auto 0 0; background: var(--bg); border-radius: 28px 28px 0 0; padding: 14px 18px calc(24px + env(safe-area-inset-bottom)); max-height: 92vh; overflow-y: auto; }
 .sheet-grabber { width: 42px; height: 5px; border-radius: 999px; background: #d2c5bc; margin: 0 auto 16px; }
-.add-modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 18px 0; }
+.add-modes { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 18px 0; }
 .mode { padding-inline: 8px; }
 .panel { display: grid; gap: 8px; margin-bottom: 18px; }
 label { font-weight: 750; margin-top: 7px; }
@@ -170,3 +170,20 @@ code { background: #f5ede7; border-radius: 7px; padding: 2px 6px; font-size: .92
 .serving-hint { margin: 8px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.4; }
 .serving-set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; align-items: center; }
 .serving-set-row .secondary { height: 44px; min-width: 72px; }
+
+
+/* v0.6 local social-video importer */
+.video-import-panel { gap: 10px; }
+.local-badge { width: fit-content; padding: 7px 10px; border-radius: 999px; background: #eef8ee; border: 1px solid #cfe5cf; color: #345b34; font-size: .76rem; font-weight: 800; }
+.optional { color: var(--muted); font-size: .76rem; font-weight: 600; }
+.check-row { display: flex; gap: 10px; align-items: flex-start; padding: 10px 0; cursor: pointer; }
+.check-row input { width: 19px; height: 19px; margin: 1px 0 0; flex: 0 0 auto; }
+.check-row span { font-size: .88rem; line-height: 1.35; }
+.check-row small { color: var(--muted); }
+.video-progress { margin-top: 2px; }
+.video-progress-track { height: 7px; background: var(--line); border-radius: 999px; overflow: hidden; }
+.video-progress-bar { width: 4%; height: 100%; background: var(--accent); border-radius: inherit; transition: width .2s ease; }
+.video-progress .status-message { margin: 7px 0 0; min-height: 1.25em; }
+.ocr-details { margin: 7px 0 2px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 13px; background: #fffdfa; }
+.ocr-details summary { cursor: pointer; font-weight: 750; font-size: .84rem; }
+.ocr-details textarea { margin-top: 9px; width: 100%; }
