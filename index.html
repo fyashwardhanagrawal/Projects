@@ -175,6 +175,10 @@
           <div><label>Cook minutes</label><input id="cookInput" type="number" min="0" placeholder="25" /></div>
         </div>
 
+        <label>Servings</label>
+        <input id="servingsInput" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 4" />
+        <p class="hint">Imported recipe pages will fill this automatically when they publish a serving size.</p>
+
         <label>Ingredients</label>
         <textarea id="ingredientsInput" rows="6" placeholder="One ingredient per line"></textarea>
 
@@ -201,6 +205,30 @@
       </div>
       <div id="viewMeta" class="meta"></div>
       <div id="viewTags" class="chips detail-chips"></div>
+      <section id="servingSection" class="serving-panel">
+        <div class="serving-copy">
+          <p class="eyebrow">SMART KITCHEN MEASUREMENTS</p>
+          <div id="servingControls" class="hidden">
+            <strong>Cooking for <span id="servingCount">—</span></strong>
+            <span id="servingOriginal" class="serving-original"></span>
+            <div class="serving-stepper" aria-label="Change servings">
+              <button id="servingMinus" type="button" aria-label="Decrease servings">−</button>
+              <input id="servingNumber" type="number" min="1" step="1" inputmode="numeric" aria-label="Servings" />
+              <button id="servingPlus" type="button" aria-label="Increase servings">＋</button>
+            </div>
+            <button id="servingReset" type="button" class="text-btn serving-reset">Reset to original</button>
+          </div>
+          <div id="servingMissing" class="hidden">
+            <strong>Set the original servings</strong>
+            <p class="serving-original">This older recipe does not have a serving size yet.</p>
+            <div class="serving-set-row">
+              <input id="baseServingsNumber" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 4" aria-label="Original servings" />
+              <button id="setBaseServingsBtn" class="secondary" type="button">Set</button>
+            </div>
+          </div>
+        </div>
+        <p class="serving-hint">Ingredients scale automatically and are shown in practical cups, tablespoons, teaspoons, ounces or pounds where conversion is reliable.</p>
+      </section>
       <section><h3>Ingredients</h3><ul id="viewIngredients"></ul></section>
       <section><h3>Instructions</h3><ol id="viewInstructions"></ol></section>
       <section id="notesSection"><h3>Notes</h3><p id="viewNotes"></p></section>

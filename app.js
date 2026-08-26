@@ -10,6 +10,9 @@ let recipes = [];
 let activeTag = 'all';
 let favoritesOnly = false;
 let viewingId = null;
+let viewServingCount = null;
+
+const SERVINGS_TAG_PREFIX = '__servings:';
 
 function showOnly(id) {
   ['setupView', 'authView', 'householdView', 'appView'].forEach(x => $(x).classList.toggle('hidden', x !== id));
@@ -32,6 +35,231 @@ function escapeHtml(s = '') {
   return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[c]));
 }
 
+
+function visibleTags(tags = []) {
+  return (tags || []).filter(t => !String(t).startsWith('__'));
+}
+
+function recipeServings(recipe) {
+  const tag = (recipe?.tags || []).find(t => String(t).startsWith(SERVINGS_TAG_PREFIX));
+  if (!tag) return null;
+  const n = Number(String(tag).slice(SERVINGS_TAG_PREFIX.length));
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function tagsWithServings(tags = [], servings = null) {
+  const clean = (tags || []).filter(t => !String(t).startsWith(SERVINGS_TAG_PREFIX));
+  const n = Number(servings);
+  if (Number.isFinite(n) && n > 0) clean.push(`${SERVINGS_TAG_PREFIX}${n}`);
+  return clean;
+}
+
+const FRACTION_VALUES = [
+  [0.125, '⅛'], [0.25, '¼'], [1/3, '⅓'], [0.375, '⅜'], [0.5, '½'],
+  [0.625, '⅝'], [2/3, '⅔'], [0.75, '¾'], [0.875, '⅞']
+];
+const UNICODE_FRACTIONS = {
+  '⅛': 0.125, '¼': 0.25, '⅓': 1/3, '⅜': 0.375, '½': 0.5,
+  '⅝': 0.625, '⅔': 2/3, '¾': 0.75, '⅞': 0.875
+};
+
+function nearestKitchenFraction(value) {
+  let best = [0, ''];
+  let diff = Math.abs(value);
+  for (const pair of FRACTION_VALUES) {
+    const d = Math.abs(value - pair[0]);
+    if (d < diff) { best = pair; diff = d; }
+  }
+  if (Math.abs(1 - value) < diff) return { value: 1, text: '', diff: Math.abs(1 - value) };
+  return { value: best[0], text: best[1], diff };
+}
+
+function formatKitchenNumber(value, tolerance = 0.035) {
+  if (!Number.isFinite(value)) return '';
+  if (Math.abs(value) < 0.0001) return '0';
+  const whole = Math.floor(value + 1e-9);
+  const frac = value - whole;
+  if (frac < 0.035) return String(whole);
+  if (1 - frac < 0.035) return String(whole + 1);
+  const best = nearestKitchenFraction(frac);
+  if (best.diff <= tolerance && best.text) return whole ? `${whole}${best.text}` : best.text;
+  const rounded = Math.round(value * 10) / 10;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+function parseNumberText(text = '') {
+  let t = String(text).trim();
+  if (!t) return null;
+  let unicode = 0;
+  for (const [symbol, value] of Object.entries(UNICODE_FRACTIONS)) {
+    if (t.includes(symbol)) {
+      unicode += value;
+      t = t.replace(symbol, '').trim();
+    }
+  }
+  let base = 0;
+  if (t) {
+    const mixed = t.match(/^(\d+)\s+(\d+)\/(\d+)$/);
+    if (mixed) base = Number(mixed[1]) + Number(mixed[2]) / Number(mixed[3]);
+    else {
+      const frac = t.match(/^(\d+)\/(\d+)$/);
+      if (frac) base = Number(frac[1]) / Number(frac[2]);
+      else if (/^\d*\.?\d+$/.test(t)) base = Number(t);
+      else return null;
+    }
+  }
+  return base + unicode;
+}
+
+function parseQuantityPrefix(line = '') {
+  const text = String(line).trim();
+  const numberToken = String.raw`(?:\d+\s+\d+\/\d+|\d+\/\d+|\d*\.?\d+|\d*[⅛¼⅓⅜½⅝⅔¾⅞])`;
+  const re = new RegExp(`^(${numberToken})(?:\\s*(?:-|–|—|to)\\s*(${numberToken}))?\\s+`, 'i');
+  const m = text.match(re);
+  if (!m) return null;
+  const low = parseNumberText(m[1]);
+  const high = m[2] ? parseNumberText(m[2]) : null;
+  if (!Number.isFinite(low)) return null;
+  return { low, high: Number.isFinite(high) ? high : null, rest: text.slice(m[0].length).trim() };
+}
+
+const UNIT_PATTERNS = [
+  { re: /^(cups?|c)\b\.?\s*/i, key: 'cup' },
+  { re: /^(tablespoons?|tbsp|tbs)\b\.?\s*/i, key: 'tbsp' },
+  { re: /^(teaspoons?|tsp)\b\.?\s*/i, key: 'tsp' },
+  { re: /^(milliliters?|millilitres?|ml)\b\.?\s*/i, key: 'ml' },
+  { re: /^(liters?|litres?|l)\b\.?\s*/i, key: 'l' },
+  { re: /^(fluid\s+ounces?|fl\.?\s*oz)\b\.?\s*/i, key: 'floz' },
+  { re: /^(ounces?|oz)\b\.?\s*/i, key: 'oz' },
+  { re: /^(pounds?|lbs?|lb)\b\.?\s*/i, key: 'lb' },
+  { re: /^(kilograms?|kilogrammes?|kg)\b\.?\s*/i, key: 'kg' },
+  { re: /^(grams?|grammes?|g)\b\.?\s*/i, key: 'g' }
+];
+
+function parseUnit(rest = '') {
+  for (const unit of UNIT_PATTERNS) {
+    const m = rest.match(unit.re);
+    if (m) return { key: unit.key, rest: rest.slice(m[0].length).trim() };
+  }
+  return { key: null, rest: rest.trim() };
+}
+
+function niceVolumeFromTsp(tsp) {
+  const cup = tsp / 48;
+  const cupWhole = cup >= 1;
+  const cupFrac = cup - Math.floor(cup);
+  const cupNice = cupWhole || nearestKitchenFraction(cupFrac).diff <= 0.018;
+  if (tsp >= 12 && cupNice) return `${formatKitchenNumber(cup, 0.02)} ${Math.abs(cup - 1) < .02 ? 'cup' : 'cups'}`;
+  const tbsp = tsp / 3;
+  if (tsp >= 3) return `${formatKitchenNumber(tbsp)} ${Math.abs(tbsp - 1) < .04 ? 'tbsp' : 'tbsp'}`;
+  return `${formatKitchenNumber(tsp)} tsp`;
+}
+
+function niceWeightFromOz(oz) {
+  if (oz >= 16) {
+    const lb = oz / 16;
+    return `${formatKitchenNumber(lb, 0.03)} ${Math.abs(lb - 1) < .04 ? 'lb' : 'lb'}`;
+  }
+  return `${formatKitchenNumber(oz, 0.03)} oz`;
+}
+
+function formatScaledRange(low, high = null) {
+  if (!Number.isFinite(high)) return formatKitchenNumber(low);
+  return `${formatKitchenNumber(low)}–${formatKitchenNumber(high)}`;
+}
+
+function scaleIngredientLine(line, factor = 1) {
+  if (!line || !Number.isFinite(factor) || factor <= 0) return line;
+  const parsed = parseQuantityPrefix(line);
+  if (!parsed) return line;
+  const unit = parseUnit(parsed.rest);
+  const low = parsed.low * factor;
+  const high = parsed.high != null ? parsed.high * factor : null;
+  const suffix = unit.rest ? ` ${unit.rest}` : '';
+
+  const volumeTsp = { cup: 48, tbsp: 3, tsp: 1, ml: 0.202884, l: 202.884, floz: 6 };
+  const weightOz = { oz: 1, lb: 16, g: 0.035274, kg: 35.274 };
+
+  if (unit.key && volumeTsp[unit.key]) {
+    if (high != null) {
+      const a = niceVolumeFromTsp(low * volumeTsp[unit.key]);
+      const b = niceVolumeFromTsp(high * volumeTsp[unit.key]);
+      return `${a}–${b}${suffix}`;
+    }
+    return `${niceVolumeFromTsp(low * volumeTsp[unit.key])}${suffix}`;
+  }
+
+  if (unit.key && weightOz[unit.key]) {
+    if (high != null) {
+      const a = niceWeightFromOz(low * weightOz[unit.key]);
+      const b = niceWeightFromOz(high * weightOz[unit.key]);
+      return `${a}–${b}${suffix}`;
+    }
+    return `${niceWeightFromOz(low * weightOz[unit.key])}${suffix}`;
+  }
+
+  return `${formatScaledRange(low, high)} ${parsed.rest}`.trim();
+}
+
+function renderScaledIngredients(recipe) {
+  const original = recipeServings(recipe);
+  const target = viewServingCount || original;
+  const factor = original && target ? target / original : 1;
+  $('viewIngredients').innerHTML = (recipe.ingredients || []).map(x => `<li>${escapeHtml(scaleIngredientLine(x, factor))}</li>`).join('') || '<li>No ingredients added.</li>';
+}
+
+function updateServingUI(recipe) {
+  const original = recipeServings(recipe);
+  $('servingSection').classList.remove('hidden');
+  $('servingControls').classList.toggle('hidden', !original);
+  $('servingMissing').classList.toggle('hidden', !!original);
+  if (!original) {
+    viewServingCount = null;
+    renderScaledIngredients(recipe);
+    return;
+  }
+  if (!viewServingCount) viewServingCount = original;
+  $('servingNumber').value = viewServingCount;
+  $('servingCount').textContent = formatKitchenNumber(viewServingCount);
+  $('servingOriginal').textContent = `Original recipe: ${formatKitchenNumber(original)} servings`;
+  $('servingReset').classList.toggle('hidden', viewServingCount === original);
+  renderScaledIngredients(recipe);
+}
+
+async function setOriginalServings() {
+  const recipe = recipes.find(x => x.id === viewingId);
+  if (!recipe) return;
+  const n = Number($('baseServingsNumber').value);
+  if (!Number.isFinite(n) || n <= 0) return alert('Enter the original number of servings first.');
+  const nextTags = tagsWithServings(recipe.tags || [], n);
+  const { error } = await client.from('recipes').update({ tags: nextTags }).eq('id', recipe.id);
+  if (error) return alert(error.message);
+  recipe.tags = nextTags;
+  viewServingCount = n;
+  $('baseServingsNumber').value = '';
+  render();
+  updateServingUI(recipe);
+}
+
+function changeViewServings(delta) {
+  const recipe = recipes.find(x => x.id === viewingId);
+  const original = recipeServings(recipe);
+  if (!recipe || !original) return;
+  const current = Number(viewServingCount || original);
+  viewServingCount = Math.max(1, Math.round((current + delta) * 4) / 4);
+  updateServingUI(recipe);
+}
+
+function setViewServings(value) {
+  const recipe = recipes.find(x => x.id === viewingId);
+  const original = recipeServings(recipe);
+  if (!recipe || !original) return;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return updateServingUI(recipe);
+  viewServingCount = Math.max(1, Math.round(n * 4) / 4);
+  updateServingUI(recipe);
+}
+
 function emojiFor(tags = []) {
   if (tags.includes('Dessert')) return '🍰';
   if (tags.includes('Indian')) return '🍛';
@@ -49,7 +277,7 @@ function render() {
   if (!$('searchInput')) return;
   const q = $('searchInput').value.trim().toLowerCase();
   const filtered = recipes.filter(r => {
-    const hay = [r.title, r.notes, ...(r.tags || []), ...(r.ingredients || [])].join(' ').toLowerCase();
+    const hay = [r.title, r.notes, ...visibleTags(r.tags), ...(r.ingredients || [])].join(' ').toLowerCase();
     const tagOk = activeTag === 'all' || (r.tags || []).includes(activeTag);
     const favOk = !favoritesOnly || r.favorite;
     return hay.includes(q) && tagOk && favOk;
@@ -62,7 +290,7 @@ function render() {
       <div class="card-emoji">${emojiFor(r.tags)}</div>
       <h3>${escapeHtml(r.title)}</h3>
       <p class="card-meta">${timeText(r)}</p>
-      <div class="card-tags">${(r.tags || []).slice(0,3).map(t => `<span class="mini-tag">${escapeHtml(t)}</span>`).join('')}</div>
+      <div class="card-tags">${visibleTags(r.tags).slice(0,3).map(t => `<span class="mini-tag">${escapeHtml(t)}</span>`).join('')}</div>
     </button>`).join('');
 
   $('emptyState').classList.toggle('hidden', filtered.length !== 0);
@@ -229,6 +457,7 @@ async function importFromLink() {
     if (data.prep_minutes != null) $('prepInput').value = data.prep_minutes;
     if (data.cook_minutes != null) $('cookInput').value = data.cook_minutes;
     if (!data.cook_minutes && !data.prep_minutes && data.total_minutes != null) $('cookInput').value = data.total_minutes;
+    if (data.servings != null) $('servingsInput').value = data.servings;
     if (Array.isArray(data.ingredients) && data.ingredients.length) $('ingredientsInput').value = data.ingredients.join('\n');
     if (Array.isArray(data.instructions) && data.instructions.length) $('instructionsInput').value = data.instructions.join('\n');
     if (Array.isArray(data.tags) && data.tags.length) $('tagsInput').value = data.tags.join(', ');
@@ -271,7 +500,10 @@ async function saveRecipe(e) {
     cook_minutes: $('cookInput').value ? Number($('cookInput').value) : null,
     ingredients: lines($('ingredientsInput').value),
     instructions: lines($('instructionsInput').value),
-    tags: $('tagsInput').value.split(',').map(x => x.trim()).filter(Boolean),
+    tags: tagsWithServings(
+      $('tagsInput').value.split(',').map(x => x.trim()).filter(Boolean),
+      $('servingsInput').value ? Number($('servingsInput').value) : null
+    ),
     notes: $('notesInput').value.trim() || null,
     source_url: $('sourceUrl').value.trim() || null,
     favorite: false
@@ -289,10 +521,11 @@ function openRecipe(id) {
   const r = recipes.find(x => x.id === id);
   if (!r) return;
   viewingId = id;
+  viewServingCount = recipeServings(r);
   $('viewTitle').textContent = r.title;
   $('viewMeta').textContent = timeText(r);
-  $('viewTags').innerHTML = (r.tags || []).map(t => `<span class="chip">${escapeHtml(t)}</span>`).join('');
-  $('viewIngredients').innerHTML = (r.ingredients || []).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>No ingredients added.</li>';
+  $('viewTags').innerHTML = visibleTags(r.tags).map(t => `<span class="chip">${escapeHtml(t)}</span>`).join('');
+  updateServingUI(r);
   $('viewInstructions').innerHTML = (r.instructions || []).map(x => `<li>${escapeHtml(x)}</li>`).join('') || '<li>No instructions added.</li>';
   $('viewNotes').textContent = r.notes || '';
   $('notesSection').classList.toggle('hidden', !r.notes);
@@ -617,6 +850,15 @@ function wireEvents() {
   $('shareCodeBtn').addEventListener('click', () => $('inviteDialog').showModal());
   $('closeInvite').addEventListener('click', () => $('inviteDialog').close());
   $('copyInviteBtn').addEventListener('click', copyInvite);
+  $('servingMinus').addEventListener('click', () => changeViewServings(-1));
+  $('servingPlus').addEventListener('click', () => changeViewServings(1));
+  $('servingNumber').addEventListener('change', e => setViewServings(e.target.value));
+  $('servingReset').addEventListener('click', () => {
+    const r = recipes.find(x => x.id === viewingId);
+    viewServingCount = recipeServings(r);
+    if (r) updateServingUI(r);
+  });
+  $('setBaseServingsBtn').addEventListener('click', setOriginalServings);
 
   if (client) {
     client.auth.onAuthStateChange(async (_event, newSession) => {

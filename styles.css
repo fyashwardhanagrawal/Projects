@@ -131,3 +131,42 @@ code { background: #f5ede7; border-radius: 7px; padding: 2px 6px; font-size: .92
   .assistant-form { grid-template-columns: 1fr; }
   .assistant-go { padding: 12px 14px; }
 }
+
+/* v0.5 serving scaler + smart kitchen measurements */
+.serving-panel {
+  margin-top: 18px !important;
+  padding: 16px;
+  border: 1px solid #ead6c8;
+  border-radius: 20px;
+  background: linear-gradient(145deg, #fffaf5, #fff1e5);
+}
+.serving-copy { display: grid; gap: 3px; }
+.serving-copy strong { font-size: 1.08rem; }
+.serving-original { color: var(--muted); font-size: .8rem; }
+.serving-stepper {
+  display: grid;
+  grid-template-columns: 46px 78px 46px;
+  gap: 8px;
+  align-items: center;
+  margin-top: 13px;
+}
+.serving-stepper button {
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: white;
+  color: var(--ink);
+  font-size: 1.25rem;
+  font-weight: 850;
+}
+.serving-stepper input {
+  height: 44px;
+  padding: 8px;
+  border-radius: 14px;
+  text-align: center;
+  font-weight: 850;
+}
+.serving-reset { padding: 9px 0 2px; }
+.serving-hint { margin: 8px 0 0; color: var(--muted); font-size: .78rem; line-height: 1.4; }
+.serving-set-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; margin-top: 10px; align-items: center; }
+.serving-set-row .secondary { height: 44px; min-width: 72px; }

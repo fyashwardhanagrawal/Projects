@@ -1,7 +1,7 @@
 {
   "name": "Our Recipes",
   "short_name": "Recipes",
-  "description": "A shared cookbook with smart meal suggestions.",
+  "description": "A shared cookbook with smart meal suggestions, serving scaling, and kitchen-friendly measurements.",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#fff8ef",
