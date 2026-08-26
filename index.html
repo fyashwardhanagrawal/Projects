@@ -173,8 +173,8 @@
         <label>Original social link <span class="optional">optional</span></label>
         <input id="videoSourceUrl" type="url" placeholder="https://www.instagram.com/reel/…" />
         <label class="check-row">
-          <input id="scanVideoText" type="checkbox" />
-          <span>Also scan a few frames for on-screen ingredient text <small>(slower, experimental)</small></span>
+          <input id="scanVideoText" type="checkbox" checked />
+          <span>Scan on-screen ingredient text too <small>(recommended, slower)</small></span>
         </label>
         <button type="button" class="primary wide" id="transcribeVideoBtn">Transcribe on this phone</button>
         <div id="videoProgressWrap" class="video-progress hidden" aria-live="polite">
@@ -190,7 +190,7 @@
           </details>
           <button type="button" class="secondary wide" id="useVideoTranscriptBtn">Turn transcript into recipe</button>
         </div>
-        <p class="hint">First use downloads a free Whisper speech model to your browser cache. Processing can take a while on a phone. The video is not uploaded to Supabase or a paid AI service.</p>
+        <p class="hint">First use downloads a larger, higher-accuracy multilingual Whisper model to your browser cache. Processing stays on this device and uses no paid AI service.</p>
       </div>
 
       <div id="manualPanel" class="panel">

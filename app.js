@@ -549,16 +549,16 @@ async function getLocalTranscriber() {
     if (!info) return;
     const p = Number(info.progress);
     if (Number.isFinite(p)) {
-      setVideoProgress(`Downloading speech model… ${Math.round(p)}%`, 18 + p * 0.30);
+      setVideoProgress(`Downloading higher-accuracy speech model… ${Math.round(p)}%`, 18 + p * 0.30);
     } else if (info.status === 'ready') {
-      setVideoProgress('Speech model ready on GPU.', 50);
+      setVideoProgress('Higher-accuracy speech model ready on GPU.', 50);
     }
   };
 
   try {
     localTranscriber = await pipeline(
       'automatic-speech-recognition',
-      'Xenova/whisper-tiny.en',
+      'onnx-community/whisper-base',
       {
         device: 'webgpu',
         dtype: 'q4',
@@ -689,59 +689,190 @@ async function scanVisibleVideoText(file) {
 const SPOKEN_NUMBER = String.raw`(?:\d+(?:\.\d+)?|\d+\s+\d+\/\d+|\d+\/\d+|[¼½¾⅓⅔⅛⅜⅝⅞]|one|two|three|four|five|six|seven|eight|nine|ten|half|quarter)`;
 const SPOKEN_UNIT = String.raw`(?:cups?|tablespoons?|tbsp|teaspoons?|tsp|ounces?|oz|pounds?|lbs?|grams?|g|kilograms?|kg|milliliters?|ml|liters?|l|cloves?|cans?|packages?|packets?|pinches?|handfuls?|pieces?|slices?)`;
 
+const COUNTABLE_FOOD = /\b(?:eggs?|onions?|tomatoes?|potatoes?|tortillas?|wraps?|cloves?|peppers?|lemons?|limes?|avocados?|bananas?|apples?|carrots?|chicken\s+breasts?|chicken\s+thighs?|slices?|cans?|packages?|packets?)\b/i;
+const NON_INGREDIENT = /\b(?:calories?|protein|carbs?|carbohydrates?|fat|fiber|fibre|daily|days?|hours?|minutes?|seconds?|week|weeks|month|months|servings?|followers?|views?|likes?|rating|stars?|menu|restaurant|selling point|treat|letter|row)\b/i;
+const CREATOR_CHATTER = /\b(?:i(?:'|’)ve|i have|i(?:'|’)m|i am|when i|i never|oh my god|as i said|however you say|on the menu|selling point|three days in a row|you can personalize|i tried|i ate|i(?:'|’)ve eaten|my daily|this one is amazing)\b/i;
+
+// Common recipe words used only as a second safety net when the creator says an
+// ingredient without giving a quantity. This is intentionally conservative.
+const INGREDIENT_TERMS = [
+  'tomato sauce','pizza sauce','marinara','soy sauce','hot sauce','fish sauce','barbecue sauce','bbq sauce',
+  'olive oil','vegetable oil','sesame oil','butter','ghee','milk','cream','yogurt','yoghurt',
+  'mozzarella','parmesan','cheddar','cheese','paneer','tofu',
+  'salt','black pepper','pepper','italian seasoning','garlic powder','onion powder','paprika','cumin','turmeric',
+  'chili powder','chilli powder','red pepper flakes','oregano','thyme','rosemary','basil','cilantro','coriander','parsley',
+  'garlic','onion','tomato','bell pepper','pepper','spinach','mushroom','potato','carrot','corn',
+  'chicken','beef','pork','turkey','shrimp','prawn','salmon','tuna','egg','eggs',
+  'flour','sugar','brown sugar','rice','pasta','noodles','bread','tortilla','tortillas','dough','broth','stock',
+  'lemon juice','lime juice','vinegar','honey','maple syrup','mustard','mayonnaise','mayo'
+].sort((a,b) => b.length - a.length);
+
 function narrationSentences(text = '') {
   return String(text)
     .replace(/\r/g, '\n')
+    .replace(/\b(?:and then|then|next|now|after that|we(?:'|’)re gonna|we are going to|you(?:'|’)re gonna|you are going to|all you have to do is|let(?:'|’)s)\b/gi, '. ')
     .split(/(?:\n+|(?<=[.!?])\s+)/)
     .map(x => x.replace(/\s+/g, ' ').trim())
     .filter(x => x.length > 2);
 }
 
+function normalizeIngredientCandidate(line = '') {
+  return String(line)
+    .replace(/^[-•*]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[,.]+$/, '')
+    .trim();
+}
+
+function isPlausibleIngredient(line = '') {
+  const clean = normalizeIngredientCandidate(line);
+  if (clean.length < 2 || clean.length > 90) return false;
+  if (NON_INGREDIENT.test(clean)) return false;
+  if (CREATOR_CHATTER.test(clean)) return false;
+  if (clean.split(/\s+/).length > 13) return false;
+  return true;
+}
+
+function ingredientTermHits(text = '') {
+  const lower = String(text).toLowerCase();
+  const hits = [];
+  for (const term of INGREDIENT_TERMS) {
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+    const re = new RegExp(`\\b${escaped}\\b`, 'i');
+    if (re.test(lower)) hits.push(term);
+  }
+  // Remove shorter terms swallowed by a better match (e.g. sauce inside tomato sauce).
+  return hits.filter((x, i) => !hits.some((y, j) => j < i && y.includes(x)));
+}
+
 function ingredientCandidatesFromNarration(text = '') {
   const out = [];
   const seen = new Set();
-  const linesToCheck = narrationSentences(text);
-  const amountRe = new RegExp(`(?:^|\\b)(${SPOKEN_NUMBER})\\s*(?:of\\s+)?(${SPOKEN_UNIT})?\\s+(?:of\\s+)?([^.;!?]{2,80})`, 'ig');
-
-  for (const line of linesToCheck) {
-    amountRe.lastIndex = 0;
-    let m;
-    while ((m = amountRe.exec(line))) {
-      let tail = m[3]
-        .replace(/\b(?:and then|then|before|after|until|into|in a|in the|to the|and cook|and stir|and mix|and fry|and bake|and simmer)\b.*$/i, '')
-        .replace(/\b(?:we need|you need|you'll need|i use|use|using|add|adding|take|start with|with)\b\s*/gi, '')
-        .trim();
-      if (!tail || tail.split(/\s+/).length > 12) continue;
-      const unit = m[2] || '';
-      const candidate = `${m[1]}${unit ? ` ${unit}` : ''} ${tail}`.replace(/\s+/g, ' ').trim();
-      const key = candidate.toLowerCase();
-      if (!seen.has(key)) { seen.add(key); out.push(candidate); }
-    }
-  }
-
-  // OCR often returns clean ingredient lines, so keep quantity-looking lines even when punctuation is sparse.
-  for (const line of String(text).split(/\n+/)) {
-    const clean = line.replace(/^[-•*]\s*/, '').trim();
-    if (!clean || !new RegExp(`^${SPOKEN_NUMBER}\\s*(?:${SPOKEN_UNIT})?\\b`, 'i').test(clean)) continue;
+  const add = raw => {
+    const clean = normalizeIngredientCandidate(raw);
+    if (!isPlausibleIngredient(clean)) return;
     const key = clean.toLowerCase();
     if (!seen.has(key)) { seen.add(key); out.push(clean); }
+  };
+
+  const linesToCheck = narrationSentences(text);
+  const unitAmountRe = new RegExp(`(?:^|\\b)(${SPOKEN_NUMBER})\\s*(?:of\\s+)?(${SPOKEN_UNIT})\\s+(?:of\\s+)?([^.;!?]{2,70})`, 'ig');
+  const countAmountRe = new RegExp(`(?:^|\\b)(${SPOKEN_NUMBER})\\s+([^.;!?]{2,45})`, 'ig');
+
+  for (const line of linesToCheck) {
+    let m;
+    unitAmountRe.lastIndex = 0;
+    while ((m = unitAmountRe.exec(line))) {
+      let tail = m[3]
+        .replace(/\b(?:and|then|before|after|until|into|to the|and cook|and stir|and mix|and fry|and bake|and simmer|and fold|and top)\b.*$/i, '')
+        .replace(/^\s*(?:we need|you need|you(?:'|’)ll need|i use|use|using|add|adding|take|start with|with)\s*/i, '')
+        .trim();
+      add(`${m[1]} ${m[2]} ${tail}`);
+    }
+
+    // Quantity without a unit is accepted only for clearly countable food nouns.
+    countAmountRe.lastIndex = 0;
+    while ((m = countAmountRe.exec(line))) {
+      const tail = m[2].replace(/\b(?:and|then|before|after|until|into|to the)\b.*$/i, '').trim();
+      if (COUNTABLE_FOOD.test(tail)) add(`${m[1]} ${tail}`);
+    }
+
+    // Creators often say "some mozzarella", "add basil", etc. Pull only known
+    // culinary terms, never arbitrary nearby words.
+    for (const term of ingredientTermHits(line)) add(term);
   }
+
+  // OCR is much cleaner than narration for quantities. Preserve only concise,
+  // plausible lines, and reject nutrition/time overlays.
+  for (const line of String(text).split(/\n+/)) {
+    const clean = normalizeIngredientCandidate(line);
+    if (!isPlausibleIngredient(clean)) continue;
+    const hasUnitAmount = new RegExp(`^${SPOKEN_NUMBER}\\s*(?:${SPOKEN_UNIT})\\b`, 'i').test(clean);
+    const hasCount = new RegExp(`^${SPOKEN_NUMBER}\\s+`, 'i').test(clean) && COUNTABLE_FOOD.test(clean);
+    if (hasUnitAmount || hasCount) add(clean);
+  }
+
   return out.slice(0, 40);
 }
 
+function cleanInstructionSegment(segment = '') {
+  let s = String(segment).replace(/\s+/g, ' ').trim();
+  if (!s) return '';
+
+  // Drop commentary after a cooking instruction instead of preserving the creator's story.
+  const chatter = s.search(CREATOR_CHATTER);
+  if (chatter >= 0) s = s.slice(0, chatter).trim();
+
+  s = s
+    .replace(/^\s*(?:so|then|next|now|and|okay|ok|alright)\s*[,.-]?\s*/i, '')
+    .replace(/\broller pin\b/gi, 'rolling pin')
+    .replace(/\bspreader? out\b/gi, 'spread it out')
+    .replace(/\bhand torn\b/gi, 'hand-torn')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // A few safe cooking-specific cleanups turn common ASR rambles into usable steps
+  // without inventing quantities.
+  if (/rolling pin/i.test(s) && /spread/i.test(s)) {
+    s = 'Use a rolling pin to gently spread it into a rounded square.';
+  } else if (/pour/i.test(s) && /tomato sauce/i.test(s) && /edge/i.test(s)) {
+    s = 'Pour the tomato sauce over one half, keeping it away from the edge.';
+  } else if (/^fold it/i.test(s)) {
+    s = 'Fold it over.';
+  } else if (/flip/i.test(s) && /over/i.test(s)) {
+    s = 'Flip it over.';
+  } else if (/put the ingredients/i.test(s) && /fold/i.test(s) && /cook/i.test(s)) {
+    const time = s.match(/\b\d+\s+minutes?\b/i)?.[0];
+    s = `Add the ingredients, fold it over, and cook${time ? ` for ${time}` : ''}.`;
+  }
+
+  // Keep instructions readable. A gigantic ASR paragraph is not a recipe step.
+  const words = s.split(/\s+/);
+  if (words.length > 28) s = words.slice(0, 28).join(' ') + '…';
+  return s;
+}
+
 function instructionCandidatesFromNarration(text = '') {
-  const action = /\b(add|mix|stir|cook|heat|bake|fry|sauté|saute|boil|simmer|pour|combine|chop|dice|slice|season|whisk|blend|roast|air\s*fry|pressure\s*cook|serve|garnish|marinate|fold|toss|drain|preheat|toast|grill|place|transfer|let|rest|flip|sprinkle|top|reduce)\b/i;
+  const action = /\b(add|mix|stir|cook|heat|bake|fry|sauté|saute|boil|simmer|pour|combine|chop|dice|slice|season|whisk|blend|roast|air\s*fry|pressure\s*cook|serve|garnish|marinate|fold|toss|drain|preheat|toast|grill|place|transfer|rest|flip|sprinkle|top|reduce|spread|roll|grab)\b/i;
   const seen = new Set();
-  return narrationSentences(text)
-    .filter(x => action.test(x) && x.split(/\s+/).length >= 3)
-    .map(x => x.replace(/^\s*(?:so|then|next|now|and)\s*[,.-]?\s*/i, '').trim())
-    .filter(x => {
-      const key = x.toLowerCase();
-      if (seen.has(key)) return false;
+  const out = [];
+
+  for (const raw of narrationSentences(text)) {
+    // If several seasonings are spoken together, recover the seasoning action even
+    // when ASR mangles the actual verb.
+    const seasonTerms = ingredientTermHits(raw).filter(x => /salt|pepper|seasoning|powder|paprika|cumin|turmeric|oregano|thyme|rosemary/i.test(x));
+    if (seasonTerms.length >= 2 && /\bwith\b/i.test(raw)) {
+      const pretty = seasonTerms.map(x => x === 'italian seasoning' ? 'Italian seasoning' : x);
+      const phrase = pretty.length === 2 ? `${pretty[0]} and ${pretty[1]}` : `${pretty.slice(0,-1).join(', ')}, and ${pretty.at(-1)}`;
+      const step = `Season with ${phrase}.`;
+      const key = step.toLowerCase();
+      if (!seen.has(key)) { seen.add(key); out.push(step); }
+    }
+
+    // Split long breathless ASR runs at contrast/reason clauses when possible.
+    const pieces = raw.split(/\s+(?:but|because|while)\s+/i);
+    for (const piece of pieces) {
+      if (!action.test(piece)) continue;
+      let clean = cleanInstructionSegment(piece);
+      if (!clean || clean.split(/\s+/).length < 3) continue;
+      const key = clean.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+      if (seen.has(key)) continue;
       seen.add(key);
-      return true;
-    })
-    .slice(0, 35);
+      out.push(clean);
+    }
+  }
+  return out.slice(0, 30);
+}
+
+function videoDraftQuality(transcript, ingredients, instructions) {
+  let score = 100;
+  const t = String(transcript || '');
+  if (ingredients.length < 3) score -= 35;
+  if (instructions.length < 2) score -= 30;
+  if (ingredients.some(x => NON_INGREDIENT.test(x))) score -= 35;
+  if (instructions.some(x => x.split(/\s+/).length > 30)) score -= 15;
+  if (/\b(?:donkey|letter to|calzoni pocket things|one for treat)\b/i.test(t)) score -= 20;
+  return Math.max(0, score);
 }
 
 function useVideoTranscriptAsRecipe() {
@@ -749,27 +880,42 @@ function useVideoTranscriptAsRecipe() {
   const ocr = $('videoOcrText').value.trim();
   if (!transcript && !ocr) return setVideoProgress('There is no transcript or on-screen text to use yet.', 100, true);
 
+  // OCR first because visible ingredient cards are usually more trustworthy than
+  // a creator speaking quickly over music.
   const combined = [ocr, transcript].filter(Boolean).join('\n');
   const ingredients = ingredientCandidatesFromNarration(combined);
   const instructions = instructionCandidatesFromNarration(transcript || combined);
+  const quality = videoDraftQuality(transcript, ingredients, instructions);
 
   if (!$('titleInput').value) {
     const file = $('videoFileInput').files?.[0];
     $('titleInput').value = cleanVideoTitle(file?.name || 'Video recipe');
   }
-  if (ingredients.length) $('ingredientsInput').value = ingredients.join('\n');
-  if (instructions.length) $('instructionsInput').value = instructions.join('\n');
+  $('ingredientsInput').value = ingredients.join('\n');
+  $('instructionsInput').value = instructions.join('\n');
   if ($('videoSourceUrl').value.trim()) $('sourceUrl').value = $('videoSourceUrl').value.trim();
 
-  const partial = !ingredients.length || !instructions.length;
+  // If extraction looks bad, do not silently make it look authoritative.
   setMode('manual');
-  setStatus(
-    'recipeImportNotice',
-    partial
-      ? 'Video transcribed locally. I could only structure part of the recipe, so review the transcript and fill any missing quantities before saving.'
-      : 'Video transcribed locally and turned into a draft recipe. Review quantities and steps before saving.',
-    partial
-  );
+  if (quality < 55) {
+    setStatus(
+      'recipeImportNotice',
+      'Low-confidence video import. I filtered obvious junk, but the speech recognition is still uncertain. Review the ingredient list and steps before saving; the raw transcript remains available if you go back to Video.',
+      true
+    );
+  } else if (!ingredients.length || !instructions.length) {
+    setStatus(
+      'recipeImportNotice',
+      'Video import is incomplete. Review the draft and fill any missing quantities or steps before saving.',
+      true
+    );
+  } else {
+    setStatus(
+      'recipeImportNotice',
+      'Video turned into a cleaner draft recipe. On-screen text was prioritized for quantities and creator commentary was trimmed. Review before saving.',
+      false
+    );
+  }
 }
 
 async function transcribeVideoLocally() {
