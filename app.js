@@ -6,17 +6,18 @@ const client = configured ? window.supabase.createClient(CONFIG.supabaseUrl, CON
 
 let session = null;
 let household = null;
+let households = [];
 let recipes = [];
 let activeTag = 'all';
 let favoritesOnly = false;
 let viewingId = null;
 let viewServingCount = null;
+let activeAppPage = 'recipes';
 
 const SERVINGS_TAG_PREFIX = '__servings:';
 
 function showOnly(id) {
   ['setupView', 'authView', 'householdView', 'appView'].forEach(x => $(x).classList.toggle('hidden', x !== id));
-  $('fab').classList.toggle('hidden', id !== 'appView');
 }
 
 function setStatus(id, message = '', isError = false) {
@@ -297,32 +298,109 @@ function render() {
   document.querySelectorAll('.recipe-card').forEach(el => el.addEventListener('click', () => openRecipe(el.dataset.id)));
 }
 
-async function loadHousehold() {
+function recipeCacheKey(householdId) {
+  return householdId ? `our-recipes-cloud-cache:${householdId}` : 'our-recipes-cloud-cache';
+}
+
+function navigateTo(page = 'recipes', scroll = true) {
+  if (!['recipes', 'ask', 'more'].includes(page)) page = 'recipes';
+  activeAppPage = page;
+  const map = { recipes: 'recipesPage', ask: 'askPage', more: 'morePage' };
+  Object.entries(map).forEach(([name, id]) => $(id)?.classList.toggle('hidden', name !== page));
+  document.querySelectorAll('.bottom-nav-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === page));
+  const titles = { recipes: 'Our Recipes', ask: 'Ask Your Cookbook', more: 'More' };
+  if ($('appPageTitle')) $('appPageTitle').textContent = titles[page];
+  if (page === 'more') renderCookbookSettings();
+  if (scroll) window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function renderCookbookSettings() {
+  if (!household) return;
+  $('cookbookName').textContent = (household.name || 'Our Kitchen').toUpperCase();
+  $('inviteCode').textContent = household.join_code || '--------';
+  $('moreCurrentCookbookName').textContent = household.name || 'Our Recipes';
+  $('moreCurrentRole').textContent = household.role === 'owner' ? 'Owner' : 'Member';
+  $('moreInviteCode').textContent = household.join_code || '--------';
+  $('accountEmail').textContent = session?.user?.email || 'Signed in';
+
+  $('cookbookList').innerHTML = households.map(h => {
+    const current = h.id === household.id;
+    return `<div class="cookbook-row ${current ? 'current' : ''}">
+      <div class="cookbook-row-copy">
+        <strong>${escapeHtml(h.name || 'Our Recipes')}</strong>
+        <span>${h.role === 'owner' ? 'Owner' : 'Member'}${current ? ' · Current' : ''}</span>
+      </div>
+      <button type="button" class="${current ? 'current-cookbook-pill' : 'secondary switch-cookbook-btn'}" data-id="${h.id}" ${current ? 'disabled' : ''}>${current ? 'Current' : 'Switch'}</button>
+    </div>`;
+  }).join('') || '<p class="settings-copy">No cookbooks found.</p>';
+
+  document.querySelectorAll('.switch-cookbook-btn').forEach(btn => btn.addEventListener('click', () => switchCookbook(btn.dataset.id)));
+}
+
+async function activateHousehold(id, page = 'recipes') {
+  const next = households.find(h => h.id === id) || households[0];
+  if (!next) return;
+  household = next;
+  localStorage.setItem('our-recipes-active-household', household.id);
+
+  try {
+    const cached = JSON.parse(localStorage.getItem(recipeCacheKey(household.id)) || '[]');
+    recipes = Array.isArray(cached) ? cached : [];
+  } catch {
+    recipes = [];
+  }
+
+  renderCookbookSettings();
+  render();
+  navigateTo(page, false);
+  await loadRecipes();
+}
+
+async function loadHousehold(preferredHouseholdId = null) {
   const { data: memberships, error } = await client
     .from('household_members')
     .select('household_id, role')
-    .eq('user_id', session.user.id)
-    .limit(1);
+    .eq('user_id', session.user.id);
 
   if (error) throw error;
   if (!memberships?.length) {
+    household = null;
+    households = [];
+    recipes = [];
+    showOnly('householdView');
+    return;
+  }
+
+  const membershipIds = memberships.map(m => m.household_id);
+  const roleById = Object.fromEntries(memberships.map(m => [m.household_id, m.role]));
+  const { data: rows, error: hError } = await client
+    .from('households')
+    .select('id, name, join_code')
+    .in('id', membershipIds);
+
+  if (hError) throw hError;
+  households = (rows || []).map(h => ({ ...h, role: roleById[h.id] || 'member' }));
+  if (!households.length) {
     household = null;
     showOnly('householdView');
     return;
   }
 
-  const { data: h, error: hError } = await client
-    .from('households')
-    .select('id, name, join_code')
-    .eq('id', memberships[0].household_id)
-    .single();
-
-  if (hError) throw hError;
-  household = h;
-  $('cookbookName').textContent = (h.name || 'Our Kitchen').toUpperCase();
-  $('inviteCode').textContent = h.join_code;
+  const savedId = localStorage.getItem('our-recipes-active-household');
+  const desiredId = [preferredHouseholdId, savedId, household?.id].find(id => id && households.some(h => h.id === id));
   showOnly('appView');
-  await loadRecipes();
+  await activateHousehold(desiredId || households[0].id, 'recipes');
+}
+
+async function switchCookbook(id) {
+  if (!id || id === household?.id) return;
+  setStatus('moreCookbookMessage', 'Switching cookbook…');
+  try {
+    await activateHousehold(id, 'recipes');
+    setStatus('moreCookbookMessage', '');
+  } catch (e) {
+    setStatus('moreCookbookMessage', e.message || 'Could not switch cookbook.', true);
+  }
 }
 
 async function loadRecipes() {
@@ -336,7 +414,7 @@ async function loadRecipes() {
   showSync('');
   if (error) throw error;
   recipes = data || [];
-  localStorage.setItem('our-recipes-cloud-cache', JSON.stringify(recipes));
+  localStorage.setItem(recipeCacheKey(household.id), JSON.stringify(recipes));
   render();
 }
 
@@ -345,9 +423,6 @@ async function bootstrap() {
     showOnly('setupView');
     return;
   }
-
-  const cached = JSON.parse(localStorage.getItem('our-recipes-cloud-cache') || '[]');
-  if (Array.isArray(cached)) recipes = cached;
 
   const { data } = await client.auth.getSession();
   session = data.session;
@@ -392,25 +467,60 @@ async function signUp() {
 }
 
 async function createHousehold() {
-  setStatus('householdMessage', 'Creating cookbook…');
+  setStatus('householdMessage', 'Creating your shared cookbook…');
   const { data, error } = await client.rpc('create_household', { p_name: 'Our Recipes' });
   if (error) return setStatus('householdMessage', error.message, true);
   setStatus('householdMessage', '');
-  await loadHousehold();
-  if (data?.[0]?.join_code) {
-    $('inviteCode').textContent = data[0].join_code;
+  const created = data?.[0];
+  await loadHousehold(created?.household_id || null);
+  if (created?.join_code) {
+    $('inviteCode').textContent = created.join_code;
     $('inviteDialog').showModal();
   }
 }
 
+async function joinHouseholdByCode(rawCode, statusId = 'householdMessage') {
+  const code = String(rawCode || '').trim().toUpperCase();
+  if (!code) {
+    setStatus(statusId, 'Enter the 8-character invite code first.', true);
+    return false;
+  }
+  setStatus(statusId, 'Joining your partner’s cookbook…');
+  const { data, error } = await client.rpc('join_household', { p_code: code });
+  if (error) {
+    setStatus(statusId, error.message, true);
+    return false;
+  }
+  setStatus(statusId, 'Joined. Switching you to the shared cookbook…');
+  await loadHousehold(data || null);
+  navigateTo('recipes');
+  setTimeout(() => setStatus(statusId, ''), 900);
+  return true;
+}
+
 async function joinHousehold() {
-  const code = $('joinCodeInput').value.trim();
-  if (!code) return setStatus('householdMessage', 'Enter the cookbook code first.', true);
-  setStatus('householdMessage', 'Joining cookbook…');
-  const { error } = await client.rpc('join_household', { p_code: code });
-  if (error) return setStatus('householdMessage', error.message, true);
-  setStatus('householdMessage', '');
-  await loadHousehold();
+  const ok = await joinHouseholdByCode($('joinCodeInput').value, 'householdMessage');
+  if (ok) $('joinCodeInput').value = '';
+}
+
+async function joinHouseholdFromMore() {
+  const ok = await joinHouseholdByCode($('moreJoinCodeInput').value, 'moreCookbookMessage');
+  if (ok) $('moreJoinCodeInput').value = '';
+}
+
+async function createAnotherCookbook() {
+  const name = $('newCookbookNameInput').value.trim() || 'Our Recipes';
+  setStatus('createCookbookMessage', 'Creating cookbook…');
+  const { data, error } = await client.rpc('create_household', { p_name: name });
+  if (error) return setStatus('createCookbookMessage', error.message, true);
+  const created = data?.[0];
+  setStatus('createCookbookMessage', 'Created.');
+  $('newCookbookNameInput').value = '';
+  await loadHousehold(created?.household_id || null);
+  if (created?.join_code) {
+    $('inviteCode').textContent = created.join_code;
+    $('inviteDialog').showModal();
+  }
 }
 
 function openAdd(mode = 'manual') {
@@ -1055,17 +1165,21 @@ async function deleteRecipe() {
 async function signOut() {
   await client.auth.signOut();
   household = null;
+  households = [];
   recipes = [];
-  localStorage.removeItem('our-recipes-cloud-cache');
   showOnly('authView');
 }
 
-async function copyInvite() {
+async function copyInvite(buttonId = 'copyInviteBtn') {
   const code = household?.join_code || $('inviteCode').textContent;
+  const button = $(buttonId);
   try {
     await navigator.clipboard.writeText(code);
-    $('copyInviteBtn').textContent = 'Copied ✓';
-    setTimeout(() => $('copyInviteBtn').textContent = 'Copy code', 1200);
+    if (button) {
+      const original = button.textContent;
+      button.textContent = 'Copied ✓';
+      setTimeout(() => button.textContent = original, 1200);
+    }
   } catch {
     alert(`Cookbook code: ${code}`);
   }
@@ -1340,14 +1454,18 @@ function wireEvents() {
   $('importLinkBtn').addEventListener('click', importFromLink);
   $('transcribeVideoBtn').addEventListener('click', transcribeVideoLocally);
   $('useVideoTranscriptBtn').addEventListener('click', useVideoTranscriptAsRecipe);
-  $('addBtn').addEventListener('click', () => openAdd());
-  $('fab').addEventListener('click', () => openAdd());
   $('emptyAddBtn').addEventListener('click', () => openAdd());
   $('closeDialog').addEventListener('click', () => $('addDialog').close());
   $('closeView').addEventListener('click', () => $('viewDialog').close());
-  $('shareCodeBtn').addEventListener('click', () => $('inviteDialog').showModal());
   $('closeInvite').addEventListener('click', () => $('inviteDialog').close());
-  $('copyInviteBtn').addEventListener('click', copyInvite);
+  $('copyInviteBtn').addEventListener('click', () => copyInvite('copyInviteBtn'));
+  $('moreCopyCodeBtn').addEventListener('click', () => copyInvite('moreCopyCodeBtn'));
+  $('moreJoinCookbookBtn').addEventListener('click', joinHouseholdFromMore);
+  $('createAnotherCookbookBtn').addEventListener('click', createAnotherCookbook);
+  $('recipesNavBtn').addEventListener('click', () => navigateTo('recipes'));
+  $('askNavBtn').addEventListener('click', () => navigateTo('ask'));
+  $('moreNavBtn').addEventListener('click', () => navigateTo('more'));
+  $('addNavBtn').addEventListener('click', () => openAdd());
   $('servingMinus').addEventListener('click', () => changeViewServings(-1));
   $('servingPlus').addEventListener('click', () => changeViewServings(1));
   $('servingNumber').addEventListener('change', e => setViewServings(e.target.value));
@@ -1364,6 +1482,7 @@ function wireEvents() {
       session = newSession;
       if (!newSession) {
         household = null;
+        households = [];
         recipes = [];
         showOnly('authView');
       } else if (!wasSignedIn) {

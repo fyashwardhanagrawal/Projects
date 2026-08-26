@@ -45,14 +45,14 @@
     <section class="auth-card">
       <div class="auth-mark">🥘</div>
       <p class="eyebrow">SHARED COOKBOOK</p>
-      <h1>Connect your kitchen</h1>
-      <p>One of you creates the cookbook. The other joins using the code.</p>
-      <div class="stack-gap">
-        <button id="createHouseholdBtn" class="primary wide" type="button">Create “Our Recipes”</button>
+      <h1>Your shared cookbook</h1>
+      <p>If your partner already created the cookbook, enter their 8-character invite code. You can also join later from <strong>More</strong>.</p>
+      <div class="stack-gap onboarding-choices">
+        <label>Partner’s invite code</label>
+        <input id="joinCodeInput" maxlength="8" autocapitalize="characters" autocomplete="off" placeholder="AB12CD34" />
+        <button id="joinHouseholdBtn" class="primary wide" type="button">Join my partner’s cookbook</button>
         <div class="or-line"><span>or</span></div>
-        <label>Join code</label>
-        <input id="joinCodeInput" maxlength="8" autocapitalize="characters" placeholder="AB12CD34" />
-        <button id="joinHouseholdBtn" class="secondary wide" type="button">Join cookbook</button>
+        <button id="createHouseholdBtn" class="secondary wide" type="button">Create a new shared cookbook</button>
       </div>
       <p id="householdMessage" class="status-message"></p>
       <button class="text-btn" id="householdSignOutBtn" type="button">Sign out</button>
@@ -60,82 +60,162 @@
   </main>
 
   <main id="appView" class="shell hidden">
-    <header class="topbar">
+    <header class="topbar app-topbar">
       <div>
         <p class="eyebrow" id="cookbookName">OUR KITCHEN</p>
-        <h1>Our Recipes</h1>
-      </div>
-      <div class="top-actions">
-        <button id="shareCodeBtn" class="icon-btn smallish" aria-label="Share cookbook code">↗</button>
-        <button id="addBtn" class="icon-btn" aria-label="Add recipe">＋</button>
+        <h1 id="appPageTitle">Our Recipes</h1>
       </div>
     </header>
 
-    <section class="hero">
-      <div>
-        <p class="hero-kicker">Tonight, maybe?</p>
-        <h2>What are we cooking?</h2>
-        <p>Save it once. Find it when you're hungry.</p>
-      </div>
-      <div class="hero-emoji">🍲</div>
-    </section>
-
-    <section class="cookbook-assistant" aria-labelledby="assistantTitle">
-      <div class="assistant-head">
+    <section id="recipesPage" class="app-page">
+      <section class="hero">
         <div>
-          <p class="eyebrow">ASK YOUR COOKBOOK</p>
-          <h3 id="assistantTitle">What should we make?</h3>
+          <p class="hero-kicker">Tonight, maybe?</p>
+          <h2>What are we cooking?</h2>
+          <p>Save it once. Find it when you're hungry.</p>
         </div>
-        <span class="assistant-spark">✨</span>
+        <div class="hero-emoji">🍲</div>
+      </section>
+
+      <section class="search-row">
+        <input id="searchInput" type="search" placeholder="Search recipes, tags, ingredients…" autocomplete="off" />
+        <button id="filterFavBtn" class="pill-btn" type="button">♡ Favorites</button>
+      </section>
+
+      <div class="chips" id="filterChips">
+        <button class="chip active" data-filter="all">All</button>
+        <button class="chip" data-filter="Indian">Indian</button>
+        <button class="chip" data-filter="Quick">Quick</button>
+        <button class="chip" data-filter="Instant Pot">Instant Pot</button>
+        <button class="chip" data-filter="Air Fryer">Air Fryer</button>
+        <button class="chip" data-filter="Dessert">Dessert</button>
       </div>
-      <form id="assistantForm" class="assistant-form">
-        <input id="assistantInput" type="search" autocomplete="off" placeholder="e.g. Give me 2 dinners under 30 min" />
-        <button class="primary assistant-go" type="submit">Find ideas</button>
-      </form>
-      <div class="assistant-prompts">
-        <button type="button" class="assistant-prompt" data-prompt="Give me 2 dinners this week">2 dinners</button>
-        <button type="button" class="assistant-prompt" data-prompt="Give me 2 lunches this week">2 lunches</button>
-        <button type="button" class="assistant-prompt" data-prompt="Show me quick meals under 30 minutes">Quick meals</button>
-        <button type="button" class="assistant-prompt" data-prompt="Surprise me with 3 recipes">Surprise me</button>
+
+      <div class="section-head">
+        <h3>Recipes</h3>
+        <span class="count-badge" id="recipeCount">0</span>
       </div>
-      <p class="assistant-hint">Try: “What can I make with paneer, peppers and tortillas?” Suggestions use only recipes saved in this cookbook.</p>
-      <div id="assistantResults" class="assistant-results hidden"></div>
+
+      <section id="syncBanner" class="sync-banner hidden">Working…</section>
+      <section id="recipeGrid" class="recipe-grid"></section>
+      <section id="emptyState" class="empty hidden">
+        <div class="empty-icon">🥄</div>
+        <h3>No recipes here yet</h3>
+        <p>Add your first recipe or paste one you've found online.</p>
+        <button id="emptyAddBtn" class="primary" type="button">Add a recipe</button>
+      </section>
     </section>
 
-    <section class="search-row">
-      <input id="searchInput" type="search" placeholder="Search recipes, tags, ingredients…" autocomplete="off" />
-      <button id="filterFavBtn" class="pill-btn" type="button">♡ Favorites</button>
+    <section id="askPage" class="app-page hidden">
+      <section class="page-intro">
+        <div class="page-intro-icon">✨</div>
+        <div>
+          <p class="eyebrow">SMART SEARCH</p>
+          <h2>Ask Your Cookbook</h2>
+          <p>Ideas come only from recipes you have actually saved.</p>
+        </div>
+      </section>
+
+      <section class="cookbook-assistant" aria-labelledby="assistantTitle">
+        <div class="assistant-head">
+          <div>
+            <p class="eyebrow">WHAT SOUNDS GOOD?</p>
+            <h3 id="assistantTitle">What should we make?</h3>
+          </div>
+          <span class="assistant-spark">✨</span>
+        </div>
+        <form id="assistantForm" class="assistant-form">
+          <input id="assistantInput" type="search" autocomplete="off" placeholder="e.g. Give me 2 dinners under 30 min" />
+          <button class="primary assistant-go" type="submit">Find ideas</button>
+        </form>
+        <div class="assistant-prompts">
+          <button type="button" class="assistant-prompt" data-prompt="Give me 2 dinners this week">2 dinners</button>
+          <button type="button" class="assistant-prompt" data-prompt="Give me 2 lunches this week">2 lunches</button>
+          <button type="button" class="assistant-prompt" data-prompt="Show me quick meals under 30 minutes">Quick meals</button>
+          <button type="button" class="assistant-prompt" data-prompt="Surprise me with 3 recipes">Surprise me</button>
+        </div>
+        <p class="assistant-hint">Try: “What can I make with paneer, peppers and tortillas?”</p>
+        <div id="assistantResults" class="assistant-results hidden"></div>
+      </section>
     </section>
 
-    <div class="chips" id="filterChips">
-      <button class="chip active" data-filter="all">All</button>
-      <button class="chip" data-filter="Indian">Indian</button>
-      <button class="chip" data-filter="Quick">Quick</button>
-      <button class="chip" data-filter="Instant Pot">Instant Pot</button>
-      <button class="chip" data-filter="Air Fryer">Air Fryer</button>
-      <button class="chip" data-filter="Dessert">Dessert</button>
-    </div>
+    <section id="morePage" class="app-page hidden">
+      <section class="page-intro compact">
+        <div class="page-intro-icon">⚙️</div>
+        <div>
+          <p class="eyebrow">ACCOUNT & SHARING</p>
+          <h2>More</h2>
+          <p>Manage your shared cookbook without having to redo onboarding.</p>
+        </div>
+      </section>
 
-    <div class="section-head">
-      <h3>Recipes</h3>
-      <span class="count-badge" id="recipeCount">0</span>
-    </div>
+      <section class="settings-card current-cookbook-card">
+        <div class="settings-card-head">
+          <div>
+            <p class="eyebrow">CURRENT SHARED COOKBOOK</p>
+            <h3 id="moreCurrentCookbookName">Our Recipes</h3>
+          </div>
+          <span id="moreCurrentRole" class="role-badge">Member</span>
+        </div>
+        <p class="settings-copy">Give this code to your partner so their existing account can join this exact cookbook.</p>
+        <div id="moreInviteCode" class="invite-code compact-code">--------</div>
+        <button id="moreCopyCodeBtn" class="primary wide" type="button">Copy invite code</button>
+      </section>
 
-    <section id="syncBanner" class="sync-banner hidden">Working…</section>
-    <section id="recipeGrid" class="recipe-grid"></section>
-    <section id="emptyState" class="empty hidden">
-      <div class="empty-icon">🥄</div>
-      <h3>No recipes here yet</h3>
-      <p>Add your first recipe or paste one you've found online.</p>
-      <button id="emptyAddBtn" class="primary" type="button">Add a recipe</button>
+      <section class="settings-card">
+        <div class="settings-card-head">
+          <div>
+            <p class="eyebrow">YOUR COOKBOOKS</p>
+            <h3>Switch cookbook</h3>
+          </div>
+        </div>
+        <p class="settings-copy">If you accidentally created a separate cookbook, keep it or switch to the one your partner shared.</p>
+        <div id="cookbookList" class="cookbook-list"></div>
+      </section>
+
+      <section class="settings-card join-card">
+        <p class="eyebrow">JOIN LATER</p>
+        <h3>Join my partner’s cookbook</h3>
+        <p class="settings-copy">Already created your account? No problem. Enter their 8-character invite code here at any time.</p>
+        <label>Invite code</label>
+        <input id="moreJoinCodeInput" maxlength="8" autocapitalize="characters" autocomplete="off" placeholder="AB12CD34" />
+        <button id="moreJoinCookbookBtn" class="primary wide" type="button">Join & switch to this cookbook</button>
+        <p id="moreCookbookMessage" class="status-message"></p>
+      </section>
+
+      <details class="settings-card create-another-card">
+        <summary>Create another cookbook</summary>
+        <div class="details-body">
+          <p class="settings-copy">Only use this if you intentionally want a separate recipe collection.</p>
+          <label>Cookbook name</label>
+          <input id="newCookbookNameInput" maxlength="60" placeholder="e.g. Holiday Recipes" />
+          <button id="createAnotherCookbookBtn" class="secondary wide" type="button">Create cookbook</button>
+          <p id="createCookbookMessage" class="status-message"></p>
+        </div>
+      </details>
+
+      <section class="settings-card account-card">
+        <p class="eyebrow">ACCOUNT</p>
+        <h3 id="accountEmail">Signed in</h3>
+        <button id="signOutBtn" class="secondary wide" type="button">Sign out</button>
+      </section>
     </section>
 
-    <footer class="app-footer">
-      <button id="signOutBtn" class="text-btn" type="button">Sign out</button>
-    </footer>
+    <nav id="bottomNav" class="bottom-nav" aria-label="Main navigation">
+      <button id="recipesNavBtn" class="bottom-nav-item active" type="button" data-page="recipes">
+        <span class="nav-icon">🍳</span><span>Recipes</span>
+      </button>
+      <button id="askNavBtn" class="bottom-nav-item" type="button" data-page="ask">
+        <span class="nav-icon">✨</span><span>Ask</span>
+      </button>
+      <button id="addNavBtn" class="bottom-nav-item add-nav-item" type="button" aria-label="Add recipe">
+        <span class="add-nav-circle">＋</span><span>Add</span>
+      </button>
+      <button id="moreNavBtn" class="bottom-nav-item" type="button" data-page="more">
+        <span class="nav-icon">⚙️</span><span>More</span>
+      </button>
+    </nav>
   </main>
-
-  <button id="fab" class="fab hidden" aria-label="Add recipe">＋</button>
 
   <dialog id="addDialog" class="sheet">
     <form method="dialog" class="sheet-card" id="recipeForm">
@@ -271,10 +351,10 @@
   <dialog id="inviteDialog" class="center-dialog">
     <article class="invite-card">
       <div class="sheet-head">
-        <div><p class="eyebrow">YOUR SHARED COOKBOOK</p><h2>Invite your wife</h2></div>
+        <div><p class="eyebrow">YOUR SHARED COOKBOOK</p><h2>Invite your partner</h2></div>
         <button class="icon-btn small" id="closeInvite" type="button">×</button>
       </div>
-      <p>After she creates her account, she can enter this code:</p>
+      <p>They can enter this code during setup or later from <strong>More → Join my partner’s cookbook</strong>.</p>
       <div id="inviteCode" class="invite-code">--------</div>
       <button id="copyInviteBtn" class="primary wide" type="button">Copy code</button>
     </article>
