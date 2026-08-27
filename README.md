@@ -1,8 +1,8 @@
-# Our Recipes PWA v0.9
+# Our Recipes PWA v0.9.1
 
-A mobile-first shared recipe PWA for two people using Supabase + Vercel. v0.9 improves article/newsletter importing and adds free local photo/screenshot recipe import.
+A mobile-first shared recipe PWA for two people using Supabase + Vercel. v0.9.2 keeps the Substack/newsletter importer and fixes photo OCR while adding multi-photo / multi-screenshot recipe import.
 
-## v0.9: Better web import + Photo/Screenshot import
+## v0.9.1: Better web import + Photo/Screenshot import
 
 - Keeps all v0.8 navigation, shared-cookbook, serving-scaling, Ask, and video features.
 - URL importer now looks for recipe sections buried inside long article/newsletter pages when no Recipe JSON-LD or WordPress recipe card exists.
@@ -20,8 +20,22 @@ This feature reads **recipe text visible in an image** (cookbook page, recipe ca
 
 ## Database
 
-**No new Supabase SQL is required for v0.9.** Existing accounts, cookbooks, and saved recipes stay unchanged.
+**No new Supabase SQL is required for v0.9.1.** Existing accounts, cookbooks, and saved recipes stay unchanged.
 
 ## Deployment
 
-Replace the current GitHub repo files with this folder, keep `api/import-recipe.js` inside `api/`, commit to the Vercel-connected production branch, and Vercel should deploy automatically. Fully close/reopen the installed PWA after deployment so the `v0.9` service-worker cache replaces the older shell.
+Replace the current GitHub repo files with this folder, keep `api/import-recipe.js` inside `api/`, commit to the Vercel-connected production branch, and Vercel should deploy automatically. Fully close/reopen the installed PWA after deployment so the `v0.9.1` service-worker cache replaces the older shell.
+
+
+## v0.9.1 hotfix
+- Adds a Substack/custom-newsletter import fallback using the public post JSON body when the page HTML hides the full newsletter content.
+- Stops copying generic article subtitles/descriptions into recipe Notes when no recipe was extracted.
+- Specifically fixes newsletter pages where the recipe appears later in the post after editorial content.
+
+
+## v0.9.2 photo hotfix
+- Fixes the browser `createWorker is not a function` OCR failure by loading Tesseract.js through its supported browser CDN global.
+- Photo mode now accepts multiple images in one selection.
+- Images are OCR'd one at a time using one reusable local worker and combined in selection order.
+- Partial success is allowed: if one screenshot is unreadable, readable pages are still retained and the app reports the skipped image.
+- Video-frame OCR uses the same corrected Tesseract loader.

@@ -759,7 +759,8 @@ function dedupeOcrLines(texts = []) {
 
 async function scanVisibleVideoText(file) {
   setVideoProgress('Loading local on-screen text scanner…', 72);
-  const { createWorker } = await import('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.esm.min.js');
+  const createWorker = window.Tesseract?.createWorker;
+  if (typeof createWorker !== 'function') throw new Error('The local text reader did not load. Refresh the app and try again.');
   if (!localOcrWorker) {
     localOcrWorker = await createWorker('eng', 1, {
       logger: m => {
@@ -1213,46 +1214,79 @@ async function imageFileToCanvas(file) {
 }
 
 async function scanRecipePhotoLocally() {
-  const file = $('photoFileInput').files?.[0];
-  if (!file) return setStatus('photoStatus', 'Take or choose a recipe photo first.', true);
-  if (!String(file.type).startsWith('image/')) return setStatus('photoStatus', 'Choose an image or screenshot.', true);
+  const files = Array.from($('photoFileInput').files || []);
+  if (!files.length) return setStatus('photoStatus', 'Take or choose at least one recipe photo or screenshot first.', true);
+  const invalid = files.find(file => !String(file.type).startsWith('image/'));
+  if (invalid) return setStatus('photoStatus', `${invalid.name || 'One selected file'} is not an image.`, true);
+
   $('scanPhotoBtn').disabled = true;
-  $('scanPhotoBtn').textContent = 'Reading on this phone…';
+  $('scanPhotoBtn').textContent = `Reading ${files.length} photo${files.length === 1 ? '' : 's'} on this phone…`;
   $('photoTextWrap').classList.add('hidden');
+
   try {
-    setStatus('photoStatus', 'Preparing the image…');
-    const canvas = await imageFileToCanvas(file);
-    const { createWorker } = await import('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.esm.min.js');
+    const createWorker = window.Tesseract?.createWorker;
+    if (typeof createWorker !== 'function') {
+      throw new Error('The local text reader did not load. Refresh the app and try again.');
+    }
+
     if (!localPhotoOcrWorker) {
       setStatus('photoStatus', 'Loading the free local text reader…');
       localPhotoOcrWorker = await createWorker('eng', 1, {
         logger: m => {
           if (m.status === 'recognizing text' && Number.isFinite(Number(m.progress))) {
-            setStatus('photoStatus', `Reading recipe text… ${Math.round(Number(m.progress) * 100)}%`);
+            const current = Number(localPhotoOcrWorker?._ourCurrentPhoto || 1);
+            const total = Number(localPhotoOcrWorker?._ourPhotoTotal || files.length);
+            setStatus('photoStatus', `Reading photo ${current} of ${total}… ${Math.round(Number(m.progress) * 100)}%`);
           }
         }
       });
     }
-    const result = await localPhotoOcrWorker.recognize(canvas);
-    const text = String(result?.data?.text || '').trim();
-    if (text.length < 8) throw new Error('I could not read enough text from that image. Try a closer, sharper photo or screenshot.');
+
+    localPhotoOcrWorker._ourPhotoTotal = files.length;
+    const blocks = [];
+    const failed = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      localPhotoOcrWorker._ourCurrentPhoto = i + 1;
+      setStatus('photoStatus', `Preparing photo ${i + 1} of ${files.length}…`);
+      try {
+        const canvas = await imageFileToCanvas(file);
+        const result = await localPhotoOcrWorker.recognize(canvas);
+        const text = String(result?.data?.text || '').trim();
+        if (text.length >= 8) blocks.push(text);
+        else failed.push(file.name || `Photo ${i + 1}`);
+      } catch (error) {
+        console.error('Photo OCR failed', file?.name, error);
+        failed.push(file.name || `Photo ${i + 1}`);
+      }
+    }
+
+    const text = blocks.join('\n\n').trim();
+    if (text.length < 8) throw new Error('I could not read enough recipe text from the selected images. Try clearer or closer screenshots/photos.');
+
     $('photoText').value = text;
     $('photoTextWrap').classList.remove('hidden');
-    setStatus('photoStatus', 'Text found. Review it, then turn it into a recipe.');
+    if (failed.length) {
+      setStatus('photoStatus', `Text found in ${blocks.length} of ${files.length} photos. ${failed.length} image${failed.length === 1 ? '' : 's'} could not be read. Review the combined text before importing.`);
+    } else {
+      setStatus('photoStatus', `Combined text from ${files.length} photo${files.length === 1 ? '' : 's'}. Review it, then turn it into a recipe.`);
+    }
   } catch (e) {
     console.error(e);
-    setStatus('photoStatus', e?.message || 'Could not read that image.', true);
+    setStatus('photoStatus', e?.message || 'Could not read the selected images.', true);
   } finally {
     $('scanPhotoBtn').disabled = false;
-    $('scanPhotoBtn').textContent = 'Read recipe from photo';
+    $('scanPhotoBtn').textContent = 'Read recipe from photo(s)';
   }
 }
 
 function usePhotoTextAsRecipe() {
   const raw = $('photoText').value.trim();
   if (!raw) return setStatus('photoStatus', 'No readable text yet.', true);
-  const file = $('photoFileInput').files?.[0];
-  applyImportedText(raw, cleanVideoTitle(file?.name || 'Photo recipe'), 'Recipe extracted from the photo. Review OCR quantities and fractions before saving.');
+  const files = Array.from($('photoFileInput').files || []);
+  const fallbackTitle = files.length === 1 ? cleanVideoTitle(files[0]?.name || 'Photo recipe') : 'Imported photo recipe';
+  applyImportedText(raw, fallbackTitle, `Recipe extracted from ${Math.max(1, files.length)} photo${files.length === 1 ? '' : 's'}. Review OCR quantities and fractions before saving.`);
 }
 
 function parsePastedText() {
@@ -1620,7 +1654,17 @@ function wireEvents() {
   document.querySelectorAll('.mode').forEach(m => m.addEventListener('click', () => setMode(m.dataset.mode)));
   $('parsePasteBtn').addEventListener('click', parsePastedText);
   $('importLinkBtn').addEventListener('click', importFromLink);
-  $('scanPhotoBtn').addEventListener('click', scanRecipePhotoLocally);
+  $('photoFileInput').addEventListener('change', () => {
+  const files = Array.from($('photoFileInput').files || []);
+  const summary = $('photoSelectionSummary');
+  if (!summary) return;
+  if (!files.length) { summary.textContent = 'No photos selected'; return; }
+  summary.textContent = files.length === 1 ? files[0].name : `${files.length} photos selected · processed in selection order`;
+  setStatus('photoStatus', '');
+  $('photoTextWrap').classList.add('hidden');
+  $('photoText').value = '';
+});
+$('scanPhotoBtn').addEventListener('click', scanRecipePhotoLocally);
   $('usePhotoTextBtn').addEventListener('click', usePhotoTextAsRecipe);
   $('transcribeVideoBtn').addEventListener('click', transcribeVideoLocally);
   $('useVideoTranscriptBtn').addEventListener('click', useVideoTranscriptAsRecipe);

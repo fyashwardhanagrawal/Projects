@@ -317,3 +317,9 @@ code { background: #f5ede7; border-radius: 7px; padding: 2px 6px; font-size: .92
 .photo-import-panel { gap: 10px; }
 #photoTextWrap { display: grid; gap: 10px; }
 #photoTextWrap.hidden { display: none; }
+
+.photo-selection-summary {
+  margin-top: 8px;
+  font-size: .9rem;
+  color: var(--muted);
+}

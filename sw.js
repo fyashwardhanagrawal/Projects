@@ -1,4 +1,4 @@
-const CACHE = 'our-recipes-v09';
+const CACHE = 'our-recipes-v092';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './config.js', './manifest.webmanifest', './icon.svg'];
 
 self.addEventListener('install', event => {

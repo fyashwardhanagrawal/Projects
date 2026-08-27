@@ -251,9 +251,10 @@
       <div id="photoPanel" class="panel hidden photo-import-panel">
         <div class="local-badge">🔒 Read on this device · $0 API cost</div>
         <label>Recipe photo or screenshot</label>
-        <input id="photoFileInput" type="file" accept="image/*" />
-        <p class="hint">Take a photo of a printed recipe, cookbook page, or recipe card, or upload a screenshot containing recipe text. Clear, straight-on text works best.</p>
-        <button type="button" class="primary wide" id="scanPhotoBtn">Read recipe from photo</button>
+        <input id="photoFileInput" type="file" accept="image/*" multiple />
+        <div id="photoSelectionSummary" class="photo-selection-summary">No photos selected</div>
+        <p class="hint">Take photos or upload multiple screenshots/pages of the same recipe. Select them in recipe order. Clear, straight-on text works best.</p>
+        <button type="button" class="primary wide" id="scanPhotoBtn">Read recipe from photo(s)</button>
         <p id="photoStatus" class="status-message"></p>
         <div id="photoTextWrap" class="hidden">
           <label>Text found in photo</label>
@@ -378,6 +379,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
