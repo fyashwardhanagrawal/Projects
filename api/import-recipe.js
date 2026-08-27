@@ -398,6 +398,63 @@ function extractNewsletterArticleRecipe(html, url) {
   };
 }
 
+
+
+function substackPostSlug(urlObj) {
+  const m = String(urlObj?.pathname || '').match(/^\/p\/([^/?#]+)/i);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function getBodyHtmlFromPostJson(data) {
+  if (!data || typeof data !== 'object') return '';
+  const candidates = [
+    data.body_html,
+    data.bodyHtml,
+    data.post?.body_html,
+    data.post?.bodyHtml,
+    data.data?.body_html,
+    data.data?.bodyHtml
+  ];
+  return candidates.find(v => typeof v === 'string' && v.trim().length > 100) || '';
+}
+
+function getPostTitleFromJson(data) {
+  if (!data || typeof data !== 'object') return '';
+  const candidates = [data.title, data.post?.title, data.data?.title];
+  return candidates.find(v => typeof v === 'string' && v.trim()) || '';
+}
+
+async function trySubstackPostApi(pageUrl) {
+  const slug = substackPostSlug(pageUrl);
+  if (!slug) return null;
+
+  // Substack publications, including custom domains, expose their public post
+  // body through this JSON endpoint. Non-Substack sites will simply 404 here.
+  const apiUrl = new URL(`/api/v1/posts/${encodeURIComponent(slug)}`, pageUrl.origin);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const r = await fetch(apiUrl.toString(), {
+      signal: controller.signal,
+      redirect: 'follow',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; OurRecipes/0.9.1; +https://vercel.app)',
+        'Accept': 'application/json,text/plain;q=0.8,*/*;q=0.5'
+      }
+    });
+    clearTimeout(timer);
+    if (!r.ok) return null;
+    const type = r.headers.get('content-type') || '';
+    if (!type.includes('json')) return null;
+    const data = await r.json();
+    const bodyHtml = getBodyHtmlFromPostJson(data);
+    if (!bodyHtml) return null;
+    return { bodyHtml, title: stripTags(getPostTitleFromJson(data)), apiUrl: r.url || apiUrl.toString() };
+  } catch {
+    return null;
+  }
+}
+
 function fallbackResult(url, html, forcedMessage = '') {
   const host = new URL(url).hostname.replace(/^www\./, '');
   const socialName = socialHostName(host);
@@ -417,7 +474,10 @@ function fallbackResult(url, html, forcedMessage = '') {
     ingredients: marked.ingredients,
     instructions: marked.instructions,
     tags: socialName ? [socialName, 'Social'] : [],
-    notes: description ? stripTags(description) : null,
+    // For ordinary article/newsletter pages, a meta description is often a
+    // subtitle or unrelated essay teaser, not recipe notes. Keep captions only
+    // for social posts where they are genuinely useful source material.
+    notes: socialName && description ? stripTags(description) : null,
     message: forcedMessage || (socialName
       ? (gotRecipeText
           ? `${socialName} exposed part of the caption, so I pulled the recipe text I could find. Review it before saving.`
@@ -462,8 +522,38 @@ module.exports = async function handler(req, res) {
     if (recipe) return send(res, 200, normalizeRecipe(recipe, finalUrl, html));
     const wprm = extractWprmRecipe(html, finalUrl);
     if (wprm) return send(res, 200, wprm);
+
+    // Try the visible page HTML first. If a Substack/custom-domain newsletter
+    // keeps its post body out of the server-rendered HTML, fetch the public post
+    // JSON and parse body_html instead.
     const newsletter = extractNewsletterArticleRecipe(html, finalUrl);
-    return send(res, 200, newsletter || fallbackResult(finalUrl, html));
+    if (newsletter) return send(res, 200, newsletter);
+
+    const pageUrl = new URL(finalUrl);
+    const substackPost = await trySubstackPostApi(pageUrl);
+    if (substackPost) {
+      const bodyRecipe = extractJsonLdRecipe(substackPost.bodyHtml);
+      if (bodyRecipe) {
+        const normalized = normalizeRecipe(bodyRecipe, finalUrl, substackPost.bodyHtml);
+        if (substackPost.title) normalized.title = substackPost.title;
+        normalized.message = 'Recipe imported from the newsletter post. Review it before saving.';
+        return send(res, 200, normalized);
+      }
+      const bodyWprm = extractWprmRecipe(substackPost.bodyHtml, finalUrl);
+      if (bodyWprm) {
+        if (substackPost.title) bodyWprm.title = substackPost.title;
+        bodyWprm.message = 'Recipe imported from the newsletter post. Review it before saving.';
+        return send(res, 200, bodyWprm);
+      }
+      const bodyNewsletter = extractNewsletterArticleRecipe(substackPost.bodyHtml, finalUrl);
+      if (bodyNewsletter) {
+        if (substackPost.title) bodyNewsletter.title = substackPost.title;
+        bodyNewsletter.message = 'Recipe found inside the Substack/newsletter post. Review it before saving.';
+        return send(res, 200, bodyNewsletter);
+      }
+    }
+
+    return send(res, 200, fallbackResult(finalUrl, html));
   } catch (e) {
     const socialName = socialHostName(url.hostname);
     if (socialName) {
