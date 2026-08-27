@@ -36,6 +36,10 @@ function escapeHtml(s = '') {
   return String(s).replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[c]));
 }
 
+function escapeRegex(s = '') {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 
 function visibleTags(tags = []) {
   return (tags || []).filter(t => !String(t).startsWith('__'));
@@ -527,6 +531,9 @@ function openAdd(mode = 'manual') {
   $('recipeForm').reset();
   setStatus('importLinkStatus', '');
   setStatus('recipeImportNotice', '');
+  setStatus('photoStatus', '');
+  $('photoTextWrap').classList.add('hidden');
+  $('photoText').value = '';
   setVideoProgress('', 4);
   $('videoProgressWrap').classList.add('hidden');
   $('videoTranscriptWrap').classList.add('hidden');
@@ -540,6 +547,7 @@ function setMode(mode) {
   document.querySelectorAll('.mode').forEach(x => x.classList.toggle('active', x.dataset.mode === mode));
   $('linkPanel').classList.toggle('hidden', mode !== 'link');
   $('pastePanel').classList.toggle('hidden', mode !== 'paste');
+  $('photoPanel').classList.toggle('hidden', mode !== 'photo');
   $('videoPanel').classList.toggle('hidden', mode !== 'video');
 }
 
@@ -592,6 +600,7 @@ async function importFromLink() {
 
 let localTranscriber = null;
 let localOcrWorker = null;
+let localPhotoOcrWorker = null;
 
 function setVideoProgress(message, percent = null, isError = false) {
   $('videoProgressWrap').classList.remove('hidden');
@@ -1081,16 +1090,175 @@ async function transcribeVideoLocally() {
 }
 
 
+
+function cleanImportedLine(line = '') {
+  return String(line)
+    .replace(/^\s*(?:[-•▪◦●*]|\d{1,2}[.)])\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isRecipeSectionLabel(line = '') {
+  const t = cleanImportedLine(line).replace(/:$/, '').toLowerCase();
+  return /^(?:salad|dressing|sauce|filling|topping|toppings|garnish|to serve|for serving|for the salad|for the dressing|for the sauce|for the filling|for the topping)$/.test(t);
+}
+
+function looksIngredientish(line = '') {
+  const t = cleanImportedLine(line);
+  if (!t || isRecipeSectionLabel(t)) return false;
+  if (/^(?:ingredients?|instructions?|directions?|method|steps?|recipe)\b/i.test(t)) return false;
+  if (/^(?:serves?|servings?|yield|prep|cook|total)\b/i.test(t)) return false;
+  if (/^(?:\d+\s*)?(?:minutes?|hours?)\b/i.test(t)) return false;
+  if (/^(?:\d+|[¼½¾⅓⅔⅛⅜⅝⅞]|one|two|three|four|five|six|seven|eight|nine|ten)\b/i.test(t)) return true;
+  if (/\b(?:cup|cups|tbsp|tablespoon|tablespoons|tsp|teaspoon|teaspoons|oz|ounce|ounces|lb|lbs|pound|pounds|g|gram|grams|kg|ml|clove|cloves|can|cans|pinch|handful)\b/i.test(t)) return true;
+  return INGREDIENT_TERMS.some(term => new RegExp(`\\b${escapeRegex(term)}\\b`, 'i').test(t));
+}
+
+function parseStructuredRecipeText(raw = '', fallbackTitle = 'Imported recipe') {
+  const rawLines = String(raw || '')
+    .replace(/\r/g, '\n')
+    .split(/\n+/)
+    .map(x => x.replace(/\s+/g, ' ').trim())
+    .filter(x => x.length > 1);
+  if (!rawLines.length) return { title: fallbackTitle, servings: null, ingredients: [], instructions: [] };
+
+  const ingIdx = rawLines.findIndex(x => /^ingredients?\b/i.test(x));
+  const dirIdx = rawLines.findIndex((x, i) => i > Math.max(-1, ingIdx) && /^(?:instructions?|directions?|method|steps?)\b/i.test(x));
+  const numberedIdx = rawLines.findIndex((x, i) => i > Math.max(-1, ingIdx) && /^\s*1[.)]\s+/.test(x));
+  const stepStart = dirIdx >= 0 ? dirIdx : numberedIdx;
+
+  let title = '';
+  const titleEnd = ingIdx >= 0 ? ingIdx : Math.min(rawLines.length, 5);
+  for (let i = 0; i < titleEnd; i++) {
+    const t = cleanImportedLine(rawLines[i]);
+    if (!t || /^(?:recipe|serves?|servings?|yield|prep|cook|total)\b/i.test(t)) continue;
+    if (t.length <= 100) { title = t; break; }
+  }
+  title = title || fallbackTitle;
+
+  const servingsMatch = String(raw).match(/(?:serves?|servings?|yield)\s*[:()\-]?\s*(\d+(?:\.\d+)?)/i);
+  const servings = servingsMatch ? Number(servingsMatch[1]) : null;
+
+  let ingredientLines = [];
+  let instructionLines = [];
+
+  if (ingIdx >= 0) {
+    const end = stepStart >= 0 ? stepStart : rawLines.length;
+    ingredientLines = rawLines.slice(ingIdx + 1, end)
+      .map(cleanImportedLine)
+      .filter(x => x && !isRecipeSectionLabel(x) && !/^(?:serves?|servings?|yield)\b/i.test(x));
+  }
+
+  if (stepStart >= 0) {
+    const from = dirIdx >= 0 ? stepStart + 1 : stepStart;
+    instructionLines = rawLines.slice(from)
+      .map(cleanImportedLine)
+      .filter(x => x && !/^(?:notes?|nutrition|subscribe|share)\b/i.test(x));
+  }
+
+  if (!ingredientLines.length) {
+    ingredientLines = rawLines.filter(looksIngredientish).map(cleanImportedLine).slice(0, 80);
+  }
+
+  if (!instructionLines.length) {
+    const ingredientSet = new Set(ingredientLines.map(x => x.toLowerCase()));
+    instructionLines = rawLines
+      .map(cleanImportedLine)
+      .filter(x => x && x.toLowerCase() !== title.toLowerCase() && !ingredientSet.has(x.toLowerCase()))
+      .filter(x => !isRecipeSectionLabel(x) && !/^(?:ingredients?|serves?|servings?|yield|prep|cook|total)\b/i.test(x))
+      .filter(x => /\b(?:add|mix|stir|cook|bake|roast|heat|whisk|combine|pour|place|serve|toss|chop|slice|dice|fry|sauté|saute|preheat|season|fold|drizzle|blend|boil|simmer)\b/i.test(x))
+      .slice(0, 60);
+  }
+
+  return {
+    title: title.slice(0, 100),
+    servings,
+    ingredients: [...new Set(ingredientLines)].slice(0, 100),
+    instructions: [...new Set(instructionLines)].slice(0, 80)
+  };
+}
+
+function applyImportedText(raw, fallbackTitle = 'Imported recipe', message = 'Recipe text extracted. Review it before saving.') {
+  const parsed = parseStructuredRecipeText(raw, fallbackTitle);
+  if (!$('titleInput').value && parsed.title) $('titleInput').value = parsed.title;
+  if (parsed.servings != null) $('servingsInput').value = parsed.servings;
+  if (parsed.ingredients.length) $('ingredientsInput').value = parsed.ingredients.join('\n');
+  if (parsed.instructions.length) $('instructionsInput').value = parsed.instructions.join('\n');
+  setMode('manual');
+  const incomplete = parsed.ingredients.length < 2 || parsed.instructions.length < 1;
+  setStatus('recipeImportNotice', incomplete ? 'I could read some text, but the recipe draft looks incomplete. Review and fill any missing ingredients or steps.' : message, incomplete);
+}
+
+async function imageFileToCanvas(file) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.decoding = 'async';
+  try {
+    await new Promise((resolve, reject) => {
+      img.onload = resolve;
+      img.onerror = () => reject(new Error('Could not open that image.'));
+      img.src = url;
+    });
+    const maxDim = 1800;
+    const scale = Math.min(1, maxDim / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round((img.naturalWidth || 1) * scale));
+    canvas.height = Math.max(1, Math.round((img.naturalHeight || 1) * scale));
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function scanRecipePhotoLocally() {
+  const file = $('photoFileInput').files?.[0];
+  if (!file) return setStatus('photoStatus', 'Take or choose a recipe photo first.', true);
+  if (!String(file.type).startsWith('image/')) return setStatus('photoStatus', 'Choose an image or screenshot.', true);
+  $('scanPhotoBtn').disabled = true;
+  $('scanPhotoBtn').textContent = 'Reading on this phone…';
+  $('photoTextWrap').classList.add('hidden');
+  try {
+    setStatus('photoStatus', 'Preparing the image…');
+    const canvas = await imageFileToCanvas(file);
+    const { createWorker } = await import('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.esm.min.js');
+    if (!localPhotoOcrWorker) {
+      setStatus('photoStatus', 'Loading the free local text reader…');
+      localPhotoOcrWorker = await createWorker('eng', 1, {
+        logger: m => {
+          if (m.status === 'recognizing text' && Number.isFinite(Number(m.progress))) {
+            setStatus('photoStatus', `Reading recipe text… ${Math.round(Number(m.progress) * 100)}%`);
+          }
+        }
+      });
+    }
+    const result = await localPhotoOcrWorker.recognize(canvas);
+    const text = String(result?.data?.text || '').trim();
+    if (text.length < 8) throw new Error('I could not read enough text from that image. Try a closer, sharper photo or screenshot.');
+    $('photoText').value = text;
+    $('photoTextWrap').classList.remove('hidden');
+    setStatus('photoStatus', 'Text found. Review it, then turn it into a recipe.');
+  } catch (e) {
+    console.error(e);
+    setStatus('photoStatus', e?.message || 'Could not read that image.', true);
+  } finally {
+    $('scanPhotoBtn').disabled = false;
+    $('scanPhotoBtn').textContent = 'Read recipe from photo';
+  }
+}
+
+function usePhotoTextAsRecipe() {
+  const raw = $('photoText').value.trim();
+  if (!raw) return setStatus('photoStatus', 'No readable text yet.', true);
+  const file = $('photoFileInput').files?.[0];
+  applyImportedText(raw, cleanVideoTitle(file?.name || 'Photo recipe'), 'Recipe extracted from the photo. Review OCR quantities and fractions before saving.');
+}
+
 function parsePastedText() {
   const raw = $('pasteText').value.trim();
   if (!raw) return;
-  const all = lines(raw);
-  if (!$('titleInput').value) $('titleInput').value = all[0]?.slice(0,80) || 'Imported recipe';
-  const ingredientGuess = all.filter(x => /^[-•*]?\s*(\d|½|¼|¾|⅓|⅔|one|two|three|cup|tbsp|tsp)/i.test(x)).slice(0,30);
-  const instructionGuess = all.filter(x => !ingredientGuess.includes(x) && x !== all[0]).slice(0,30);
-  $('ingredientsInput').value = ingredientGuess.join('\n');
-  $('instructionsInput').value = instructionGuess.join('\n');
-  setMode('manual');
+  applyImportedText(raw, 'Imported recipe', 'Recipe parsed from pasted text. Review it before saving.');
 }
 
 async function saveRecipe(e) {
@@ -1452,6 +1620,8 @@ function wireEvents() {
   document.querySelectorAll('.mode').forEach(m => m.addEventListener('click', () => setMode(m.dataset.mode)));
   $('parsePasteBtn').addEventListener('click', parsePastedText);
   $('importLinkBtn').addEventListener('click', importFromLink);
+  $('scanPhotoBtn').addEventListener('click', scanRecipePhotoLocally);
+  $('usePhotoTextBtn').addEventListener('click', usePhotoTextAsRecipe);
   $('transcribeVideoBtn').addEventListener('click', transcribeVideoLocally);
   $('useVideoTranscriptBtn').addEventListener('click', useVideoTranscriptAsRecipe);
   $('emptyAddBtn').addEventListener('click', () => openAdd());

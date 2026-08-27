@@ -229,6 +229,7 @@
         <button type="button" class="mode active" data-mode="manual">✍️ Manual</button>
         <button type="button" class="mode" data-mode="link">🔗 Link</button>
         <button type="button" class="mode" data-mode="paste">📋 Paste</button>
+        <button type="button" class="mode" data-mode="photo">📷 Photo</button>
         <button type="button" class="mode" data-mode="video">🎥 Video</button>
       </div>
 
@@ -244,6 +245,21 @@
         <label>Paste recipe text</label>
         <textarea id="pasteText" rows="7" placeholder="Paste ingredients, directions, caption, transcript…"></textarea>
         <button type="button" class="secondary" id="parsePasteBtn">Use pasted text</button>
+      </div>
+
+
+      <div id="photoPanel" class="panel hidden photo-import-panel">
+        <div class="local-badge">🔒 Read on this device · $0 API cost</div>
+        <label>Recipe photo or screenshot</label>
+        <input id="photoFileInput" type="file" accept="image/*" />
+        <p class="hint">Take a photo of a printed recipe, cookbook page, or recipe card, or upload a screenshot containing recipe text. Clear, straight-on text works best.</p>
+        <button type="button" class="primary wide" id="scanPhotoBtn">Read recipe from photo</button>
+        <p id="photoStatus" class="status-message"></p>
+        <div id="photoTextWrap" class="hidden">
+          <label>Text found in photo</label>
+          <textarea id="photoText" rows="9" placeholder="Extracted recipe text will appear here. You can fix anything before importing."></textarea>
+          <button type="button" class="secondary wide" id="usePhotoTextBtn">Turn photo text into recipe</button>
+        </div>
       </div>
 
       <div id="videoPanel" class="panel hidden video-import-panel">

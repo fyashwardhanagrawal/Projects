@@ -1,33 +1,27 @@
-# Our Recipes PWA v0.8
+# Our Recipes PWA v0.9
 
-A mobile-first shared recipe PWA for two people using Supabase + Vercel. v0.8 adds permanent navigation and shared-cookbook management so joining is no longer a one-time onboarding decision.
+A mobile-first shared recipe PWA for two people using Supabase + Vercel. v0.9 improves article/newsletter importing and adds free local photo/screenshot recipe import.
 
-## v0.8: Navigation + shared cookbook controls
+## v0.9: Better web import + Photo/Screenshot import
 
-- Adds mobile bottom navigation: **Recipes · Ask · Add · More**.
-- Moves **Ask Your Cookbook** into its own tab so the recipe library stays uncluttered.
-- Adds a permanent **More** area for account and sharing controls.
-- A user who already created an account can now join a partner's cookbook later by entering the 8-character invite code under **More → Join my partner’s cookbook**.
-- Joining a cookbook automatically switches to it so the shared recipes appear immediately.
-- Supports multiple cookbook memberships and lets the user **Switch cookbook** from More.
-- Keeps a separate local recipe cache per cookbook to avoid showing recipes from the wrong collection while switching.
-- The current cookbook's invite code is always visible/copyable from More.
-- Onboarding language is simplified to **Join my partner’s cookbook** or **Create a new shared cookbook**. No team terminology.
-- Allows intentionally creating another cookbook from More without trapping users who made one by mistake.
+- Keeps all v0.8 navigation, shared-cookbook, serving-scaling, Ask, and video features.
+- URL importer now looks for recipe sections buried inside long article/newsletter pages when no Recipe JSON-LD or WordPress recipe card exists.
+- Supports common newsletter layouts with a recipe title, **Ingredients** heading, ingredient sub-sections/lists, and ordered cooking steps.
+- For source serving ranges such as **serves 2–4**, uses the larger number as the scaling baseline and records the original range in Notes.
+- Adds **Photo** as an Add Recipe mode.
+- From Photo mode, the phone can take/choose a photo or screenshot of printed recipe text.
+- OCR runs locally in the browser with Tesseract.js; no paid OCR/AI API is required.
+- Extracted photo text is shown for review before it becomes a recipe.
+- Pasted text and photo OCR now share a more structured recipe parser that recognizes Ingredients / Directions / Method / numbered steps and serving counts.
 
-## Existing features remain
+## Important photo-import boundary
 
-- Shared Supabase cookbook for two accounts.
-- Normal recipe URL import through `/api/import-recipe`.
-- Free local social-video transcription with Whisper Base multilingual + optional OCR.
-- Ask Your Cookbook recommendations and ingredient matching.
-- Serving scaling and smart US kitchen measurements.
-- Favorites, search, tags, notes, source links, manual/pasted-text entry, and installable PWA support.
+This feature reads **recipe text visible in an image** (cookbook page, recipe card, screenshot, printed recipe). It does not reliably identify an unknown dish from a food-only photograph and invent the exact recipe.
 
 ## Database
 
-**No new Supabase SQL is required for v0.8.** The existing `households`, `household_members`, `recipes`, `create_household`, and `join_household` setup is sufficient.
+**No new Supabase SQL is required for v0.9.** Existing accounts, cookbooks, and saved recipes stay unchanged.
 
 ## Deployment
 
-Replace the current GitHub repo files with this folder, keep `api/import-recipe.js` inside `api/`, commit to the Vercel-connected production branch, and Vercel should deploy automatically. Fully close/reopen the installed PWA after deployment so the `v0.8` service-worker cache replaces the older shell.
+Replace the current GitHub repo files with this folder, keep `api/import-recipe.js` inside `api/`, commit to the Vercel-connected production branch, and Vercel should deploy automatically. Fully close/reopen the installed PWA after deployment so the `v0.9` service-worker cache replaces the older shell.

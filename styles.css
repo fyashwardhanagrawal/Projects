@@ -188,7 +188,7 @@ code { background: #f5ede7; border-radius: 7px; padding: 2px 6px; font-size: .92
 .ocr-details summary { cursor: pointer; font-weight: 750; font-size: .84rem; }
 .ocr-details textarea { margin-top: 9px; width: 100%; }
 
-/* v0.8 navigation + shared cookbook management */
+/* v0.8+ navigation + shared cookbook management */
 .app-topbar { margin-bottom: 10px; }
 .app-page { min-height: 60vh; }
 .page-intro {
@@ -313,3 +313,7 @@ code { background: #f5ede7; border-radius: 7px; padding: 2px 6px; font-size: .92
   .bottom-nav { border-left: 1px solid var(--line); border-right: 1px solid var(--line); border-radius: 20px 20px 0 0; }
   .settings-card { max-width: 640px; }
 }
+
+.photo-import-panel { gap: 10px; }
+#photoTextWrap { display: grid; gap: 10px; }
+#photoTextWrap.hidden { display: none; }
