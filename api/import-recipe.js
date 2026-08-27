@@ -297,6 +297,107 @@ function extractWprmRecipe(html, url) {
   };
 }
 
+
+
+function headingRecords(html = '') {
+  const out = [];
+  const re = /<h([1-6])\b[^>]*>([\s\S]*?)<\/h\1>/gi;
+  for (const m of html.matchAll(re)) {
+    out.push({ level: Number(m[1]), text: stripTags(m[2]), index: m.index, end: m.index + m[0].length });
+  }
+  return out;
+}
+
+function listItemsFromBlock(block = '') {
+  return [...String(block).matchAll(/<li\b[^>]*>([\s\S]*?)<\/li>/gi)]
+    .map(m => stripTags(m[1]).replace(/^[•*\-–—]\s*/, '').trim())
+    .filter(x => x.length > 1);
+}
+
+function extractNewsletterArticleRecipe(html, url) {
+  const headings = headingRecords(html);
+  if (!headings.length) return null;
+
+  const ingredientHeading = headings.find(h => /^ingredients?\b/i.test(h.text));
+  if (!ingredientHeading) return null;
+
+  // Recipe/newsletter pages often use: RECIPE! -> recipe title -> Ingredients ->
+  // ingredient subsections -> ordered-list directions. Stay near that section so
+  // navigation/footer lists do not get mistaken for ingredients.
+  const ingredientStart = ingredientHeading.end;
+  const maxEnd = Math.min(html.length, ingredientStart + 120000);
+  const afterIngredients = html.slice(ingredientStart, maxEnd);
+  const olMatch = afterIngredients.match(/<ol\b[^>]*>[\s\S]*?<\/ol>/i);
+  let instructions = olMatch ? listItemsFromBlock(olMatch[0]) : [];
+  let ingredientRegion = olMatch ? afterIngredients.slice(0, olMatch.index) : afterIngredients.slice(0, 50000);
+
+  // If there is an explicit directions/method heading before the first <ol>, stop
+  // ingredients there and look immediately after it for numbered/list steps.
+  const methodHeading = ingredientRegion.match(/<h[1-6]\b[^>]*>\s*(?:<[^>]+>\s*)*(?:instructions?|directions?|method|steps?)\b[\s\S]*?<\/h[1-6]>/i);
+  if (methodHeading) {
+    ingredientRegion = ingredientRegion.slice(0, methodHeading.index);
+    const methodStart = ingredientStart + methodHeading.index + methodHeading[0].length;
+    const methodTail = html.slice(methodStart, Math.min(html.length, methodStart + 50000));
+    const methodList = methodTail.match(/<(?:ol|ul)\b[^>]*>[\s\S]*?<\/(?:ol|ul)>/i);
+    if (methodList) instructions = listItemsFromBlock(methodList[0]);
+  }
+
+  const ingredientLists = [...ingredientRegion.matchAll(/<ul\b[^>]*>([\s\S]*?)<\/ul>/gi)]
+    .flatMap(m => listItemsFromBlock(m[0]));
+  let ingredients = ingredientLists;
+  if (ingredients.length < 3) ingredients = listItemsFromBlock(ingredientRegion);
+
+  // Some newsletters render directions as plain numbered paragraphs instead of <ol>.
+  if (instructions.length < 2) {
+    const tail = afterIngredients.slice(Math.min(afterIngredients.length, ingredientRegion.length));
+    instructions = [...tail.matchAll(/<(?:p|div)\b[^>]*>\s*(\d{1,2})[.)]\s*([\s\S]*?)<\/(?:p|div)>/gi)]
+      .map(m => stripTags(m[2]))
+      .filter(Boolean)
+      .slice(0, 60);
+  }
+
+  ingredients = ingredients
+    .map(x => x.replace(/^[-•*]\s*/, '').trim())
+    .filter(x => !/^(?:share|subscribe|comment|reply|like|read more)$/i.test(x))
+    .slice(0, 120);
+  instructions = instructions
+    .map(x => x.replace(/^\d+[.)]\s*/, '').trim())
+    .filter(Boolean)
+    .slice(0, 80);
+
+  if (ingredients.length < 3 || instructions.length < 2) return null;
+
+  const previousHeadings = headings.filter(h => h.index < ingredientHeading.index);
+  let title = '';
+  for (let i = previousHeadings.length - 1; i >= 0; i--) {
+    const h = previousHeadings[i];
+    if (/^(?:recipe!?|ingredients?|salad|dressing|sauce|filling|topping|method|directions?)$/i.test(h.text.trim())) continue;
+    if (h.level <= 3) { title = h.text; break; }
+  }
+  title = title || titleFromHtml(html) || 'Imported recipe';
+
+  const servesText = ingredientHeading.text;
+  const servesMatch = servesText.match(/(?:serves?|servings?|yield)\s*[:()\-]?\s*(\d+(?:\.\d+)?)(?:\s*[-–—]\s*(\d+(?:\.\d+)?))?/i);
+  const servings = servesMatch ? Number(servesMatch[2] || servesMatch[1]) : null;
+  const servingRangeNote = servesMatch?.[2] ? `Original source says serves ${servesMatch[1]}–${servesMatch[2]}. The larger number is used as the scaling baseline.` : null;
+
+  return {
+    ok: true,
+    partial: false,
+    source_url: url,
+    title: stripTags(title),
+    prep_minutes: null,
+    cook_minutes: null,
+    total_minutes: null,
+    servings,
+    ingredients,
+    instructions,
+    tags: ['Newsletter'],
+    notes: servingRangeNote,
+    message: 'Recipe found inside the article/newsletter. Review it before saving.'
+  };
+}
+
 function fallbackResult(url, html, forcedMessage = '') {
   const host = new URL(url).hostname.replace(/^www\./, '');
   const socialName = socialHostName(host);
@@ -360,7 +461,9 @@ module.exports = async function handler(req, res) {
     const recipe = extractJsonLdRecipe(html);
     if (recipe) return send(res, 200, normalizeRecipe(recipe, finalUrl, html));
     const wprm = extractWprmRecipe(html, finalUrl);
-    return send(res, 200, wprm || fallbackResult(finalUrl, html));
+    if (wprm) return send(res, 200, wprm);
+    const newsletter = extractNewsletterArticleRecipe(html, finalUrl);
+    return send(res, 200, newsletter || fallbackResult(finalUrl, html));
   } catch (e) {
     const socialName = socialHostName(url.hostname);
     if (socialName) {
